@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Quality - Imperative Skill
+# Python Quality
 
-**When to invoke**: Code review, refactoring, cleanup, naming, documentation.
-
----
+Naming, comments, documentation, logging, and anti-patterns.
 
 ## Core Commands
 
@@ -159,7 +157,7 @@ def fetch_user(user_id: str) -> User:
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** spend 5x time on naming vs comments
 - **DO** write comments for WHY, not WHAT
@@ -176,7 +174,7 @@ def fetch_user(user_id: str) -> User:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-composition**: Classes vs modules (modules for namespacing)
 - **python-modules**: When to split files (section dividers = split signal)

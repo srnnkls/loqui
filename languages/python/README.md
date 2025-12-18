@@ -138,10 +138,10 @@ Use type hints consistently:
 
 ---
 
-## Related Skills
+## Related
 
-- **code-review**: Review methodology (delegates here for Python specifics)
-- **pr-review**: GitHub PR workflow (delegates to code-review)
+- [quality.md](quality.md), [composition.md](composition.md), [domain-types.md](domain-types.md), etc.
+- **code-review**: Review methodology
 - **code-test**: Test-driven development workflow
 
 ---

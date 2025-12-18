@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Errors - Imperative Skill
+# Python Errors
 
-**When to invoke**: Designing error handling, exception hierarchies, error propagation.
-
----
+Error handling, exception hierarchies, and error propagation patterns.
 
 ## Core Commands
 
@@ -172,7 +170,7 @@ def save_normalized_path(raw_path: str) -> None:
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** use exceptions by default
 - **DO** create exception hierarchies for domain errors
@@ -187,7 +185,7 @@ def save_normalized_path(raw_path: str) -> None:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-async-io**: Result types for async error coordination
 - **python-domain-types**: Parse-don't-validate at boundaries

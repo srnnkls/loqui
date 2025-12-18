@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Async/IO - Imperative Skill
+# Python Async/IO
 
-**When to invoke**: Working with async code, I/O operations, streaming data, concurrency.
-
----
+Async/await patterns, I/O operations, streaming data, and concurrency.
 
 ## Core Commands
 
@@ -131,7 +129,7 @@ async def stream_logs(source: str) -> AsyncIterator[LogEntry]:
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** use async ONLY for I/O-bound operations
 - **DO** ALWAYS set timeouts on async I/O
@@ -148,7 +146,7 @@ async def stream_logs(source: str) -> AsyncIterator[LogEntry]:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-errors**: Result types for async error coordination
 - **python-control-flow**: Generators vs lists

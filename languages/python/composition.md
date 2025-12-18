@@ -2,9 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Composition - Imperative Skill
+# Python Composition
 
-**When to invoke**: Structuring behavior, deciding classes vs functions vs modules, composing functionality.
+Structuring behavior, classes vs functions vs modules, and composition patterns.
 
 ## Core Commands
 
@@ -169,7 +169,7 @@ def format_message_detailed(message: Message) -> str:
 - **Function layer**: Pure functions and services
 - **Orchestration layer**: Stateful coordinators (when necessary)
 
-## Commands Summary
+## Summary
 
 - **NEVER** use behavioral inheritance (except exceptions)
 - **NEVER** use `@staticmethod` - use module functions
@@ -185,7 +185,7 @@ def format_message_detailed(message: Message) -> str:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-domain-types**: When to add methods to value objects
 - **python-modules**: Organizing functions into cohesive modules

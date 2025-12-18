@@ -2,9 +2,9 @@
 paths: "**/*.go, **/go.mod"
 ---
 
-# Go Modules - Imperative Skill
+# Go Modules
 
-**When to invoke**: Organizing code, creating packages, exposing public APIs, project structure.
+Package structure, organization, and public API design.
 
 ## Core Commands
 
@@ -294,7 +294,7 @@ internal/github/
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** use standard layout: `cmd/` for apps, `internal/` for private code
 - **DO** organize by feature/domain, NOT technical layer

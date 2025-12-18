@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Control Flow - Imperative Skill
+# Python Control Flow
 
-**When to invoke**: Writing conditionals, loops, branching logic, data transformations.
-
----
+Conditionals, loops, branching logic, and data transformations.
 
 ## Core Commands
 
@@ -150,7 +148,7 @@ def find_path(root: Node, target: Node) -> list[Node] | None:
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** use `match/case` for structural inspection of data
 - **DO** use keyword patterns (`content=None`), NEVER positional
@@ -164,7 +162,7 @@ def find_path(root: Node, target: Node) -> list[Node] | None:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-domain-types**: Pattern matching on discriminated unions
 - **python-errors**: Pattern matching on Result types

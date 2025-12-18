@@ -2,11 +2,9 @@
 paths: "**/*.go, **/go.mod"
 ---
 
-# Go Quality - Imperative Skill
+# Go Quality
 
-**When to invoke**: Code review, refactoring, cleanup, naming, documentation.
-
----
+Naming, comments, documentation, and code conventions.
 
 ## Core Commands
 
@@ -250,7 +248,7 @@ defer file.Close()
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** spend 5x time on naming vs comments
 - **DO** write comments for WHY, not WHAT

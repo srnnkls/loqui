@@ -2,9 +2,9 @@
 paths: "**/*.go, **/go.mod"
 ---
 
-# Go Errors - Imperative Skill
+# Go Errors
 
-**When to invoke**: Error handling, error types, error wrapping, error checking patterns.
+Error handling, error types, wrapping, and checking patterns.
 
 ## Core Commands
 
@@ -283,7 +283,7 @@ defer file.Close()  // Error ignored
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** return errors explicitly (no exceptions in Go)
 - **DO** check errors immediately after they occur

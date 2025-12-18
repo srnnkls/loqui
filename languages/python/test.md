@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Testing - Type-Driven Test Architecture
+# Python Testing
 
-**When to invoke**: Writing tests, designing fixtures, creating test doubles.
-
----
+Type-driven test architecture, fixtures, and test doubles.
 
 ## Core Principles
 
@@ -235,7 +233,7 @@ def test_join_with_empty_table():
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** compose fixtures via DI like production code
 - **DO** use frozen dataclasses for test cases

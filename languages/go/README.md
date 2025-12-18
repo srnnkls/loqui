@@ -85,10 +85,10 @@ Your Python style maps naturally to Go:
 
 ---
 
-## Related Skills
+## Related
 
-- **code-review**: Review methodology (delegates here for Go specifics)
-- **pr-review**: GitHub PR workflow (delegates to code-review)
+- [quality.md](quality.md), [composition.md](composition.md), [modules.md](modules.md), [errors.md](errors.md)
+- **code-review**: Review methodology
 
 ---
 

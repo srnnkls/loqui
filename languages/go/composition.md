@@ -2,9 +2,9 @@
 paths: "**/*.go, **/go.mod"
 ---
 
-# Go Composition - Imperative Skill
+# Go Composition
 
-**When to invoke**: Structuring behavior, deciding structs vs interfaces vs packages, composing functionality.
+Structuring behavior, structs vs interfaces vs packages, and composition patterns.
 
 ## Core Commands
 
@@ -268,7 +268,7 @@ type User struct {
 
 ---
 
-## Commands Summary
+## Summary
 
 - **NEVER** try to emulate inheritance (Go doesn't have it intentionally)
 - **DO** use small, focused interfaces (1-3 methods)

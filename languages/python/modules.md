@@ -2,9 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Modules - Imperative Skill
+# Python Modules
 
-**When to invoke**: Organizing code, creating packages, exposing public APIs, module structure.
+Package structure, imports, public APIs, and module organization.
 
 ## Core Commands
 
@@ -173,7 +173,7 @@ class LLMConfig:  # Unnecessary wrapper
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** ALWAYS use src layout (`src/myproject/`)
 - **DO** organize by feature/domain, NOT layer
@@ -190,7 +190,7 @@ class LLMConfig:  # Unnecessary wrapper
 
 ---
 
-## Related Skills
+## Related
 - **python-composition**: Classes vs modules (use modules for namespacing)
 - **python-quality**: When to split files (section dividers = time to split)
 

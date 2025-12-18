@@ -2,11 +2,9 @@
 paths: "**/*.py, **/pyproject.toml"
 ---
 
-# Python Domain Types - Imperative Skill
+# Python Domain Types
 
-**When to invoke**: Designing domain models, data structures, API contracts, or type definitions.
-
----
+Domain models, data structures, API contracts, and type definitions.
 
 ## Core Commands
 
@@ -146,7 +144,7 @@ def parse[T](data: str, parser: Callable[[str], T]) -> Result[T, ValueError]:
 
 ---
 
-## Commands Summary
+## Summary
 
 - **DO** start with types to model your domain
 - **DO** use `@dataclass(frozen=True, kw_only=True)` for value objects
@@ -163,7 +161,7 @@ def parse[T](data: str, parser: Callable[[str], T]) -> Result[T, ValueError]:
 
 ---
 
-## Related Skills
+## Related
 
 - **python-composition**: When to add methods vs extract functions
 - **python-control-flow**: Pattern matching on discriminated unions
