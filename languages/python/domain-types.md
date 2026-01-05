@@ -85,6 +85,10 @@ Message = Annotated[
 
 **NEVER use stringly-typed enums or runtime validation for structural variants.**
 
+This pattern implements **Algebraic Data Types (ADTs)** — also called sum types. Where inheritance models "is-a" hierarchies (open, extensible), ADTs model "one-of" variants (closed, exhaustive). Each variant has exactly the fields it needs. The type checker enforces exhaustive handling via pattern matching.
+
+ADTs are native in Rust (`enum`) and ML-family languages. Python emulates them with union types + frozen dataclasses + `match`. The concept is the same: data, not behavior; closed set, not open hierarchy.
+
 ### USE Pydantic Field Constraints
 
 **At boundaries:**
