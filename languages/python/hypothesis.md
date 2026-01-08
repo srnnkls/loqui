@@ -209,6 +209,27 @@ def test_user_registration(repository: UserRepository, email: str):
     assert repository.get(user.id).email == email
 ```
 
+**Hypothesis + databases is tricky.** Hypothesis runs many examples per test invocation, and replays cached failures across runs. Function-scoped fixtures don't help — they run once per test, not per example.
+
+Prefer one of:
+
+```python
+# ✓ BEST: Use in-memory fakes for property tests
+@given(st.from_type(User))
+def test_user_persistence(fake_repository: FakeUserRepository, user: User):
+    fake_repository.save(user)
+    assert fake_repository.get(user.id) == user
+
+# ✓ OK: Design for idempotency with unique IDs
+@given(st.uuids(), st.emails())
+def test_user_persistence(database: Database, user_id: UUID, email: str):
+    user = User(id=user_id, email=email)
+    database.save(user)
+    assert database.get(user_id) == user  # Works even with accumulated state
+```
+
+Save database integration tests for example-based tests where you control setup explicitly.
+
 ### With Parametrize
 
 **Combine `@given` with `@pytest.mark.parametrize` for cross-product testing.**
