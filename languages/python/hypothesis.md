@@ -25,6 +25,8 @@ def test_sort_is_idempotent(xs: list[int]):
 
 Hypothesis generates ~100 random inputs per test, shrinks failures to minimal reproductions, and remembers failing cases across runs.
 
+**Shrinking:** When a test fails, Hypothesis automatically tries smaller/simpler inputs to find the minimal failing case. A failure on a 1000-element list might shrink to `[0, 1]`. This makes debugging much easier — you see the simplest input that triggers the bug.
+
 ---
 
 ## Basic Patterns
@@ -42,6 +44,23 @@ def test_addition_is_commutative(a: int, b: int):
 def test_string_reversal_is_involutory(s: str):
     assert s[::-1][::-1] == s
 ```
+
+### Pinning Specific Examples
+
+**Use `@example` to always test specific inputs alongside generated ones.**
+
+```python
+from hypothesis import given, example, strategies as st
+
+@given(st.text())
+@example("")           # Always test empty string
+@example("a" * 10000)  # Always test large input
+def test_string_processing(s: str):
+    result = process(s)
+    assert len(result) <= len(s)
+```
+
+Useful for regression tests — when you find a bug, add an `@example` with the failing input.
 
 ### Common Properties to Test
 
@@ -158,7 +177,18 @@ def test_bulk_operations(users: list[User]):
     ...
 ```
 
-Hypothesis also infers strategies for `@dataclass` and `attrs` classes automatically when all fields have registered or inferrable types.
+Hypothesis also infers strategies for `@dataclass` and `attrs` classes automatically when all fields have registered or inferrable types:
+
+```python
+@dataclass
+class Point:
+    x: int
+    y: int
+
+@given(st.from_type(Point))
+def test_point_distance_from_origin(p: Point):
+    assert p.x**2 + p.y**2 >= 0  # Just works — no registration needed
+```
 
 ---
 
@@ -208,6 +238,21 @@ settings.register_profile("ci", max_examples=1000)
 settings.register_profile("dev", max_examples=50)
 settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "dev"))
 ```
+
+### CI Caching
+
+Hypothesis stores failing examples in `.hypothesis/examples/` for reproducibility. Configure your CI to cache this directory:
+
+```yaml
+# .github/workflows/test.yml
+- uses: actions/cache@v4
+  with:
+    path: .hypothesis
+    key: hypothesis-${{ github.ref }}
+    restore-keys: hypothesis-
+```
+
+Add `.hypothesis/` to `.gitignore` — the cache is machine-specific but valuable for CI regression detection.
 
 ---
 
@@ -289,11 +334,13 @@ def test_division(a: int, b: int):
     assume(b != 0)  # Most examples pass, but this is wasteful
     assert a / b * b == pytest.approx(a)
 
-# ✓ CORRECT: Generate valid data directly
-@given(st.integers(), st.integers().filter(lambda x: x != 0))
+# ✓ CORRECT: Generate valid data directly with union
+@given(st.integers(), st.integers(min_value=1) | st.integers(max_value=-1))
 def test_division(a: int, b: int):
     assert a / b * b == pytest.approx(a)
 ```
+
+The `|` operator creates a union strategy — more efficient than `.filter()` for simple exclusions.
 
 ---
 

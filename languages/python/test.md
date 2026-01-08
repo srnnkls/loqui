@@ -105,6 +105,37 @@ src/myproject/cart/pricing.py →  tests/unit/cart/test_pricing.py
 
 ---
 
+## Testing Exceptions
+
+**Use `pytest.raises` as a context manager with `match` for validation.**
+
+```python
+def test_negative_quantity_raises():
+    with pytest.raises(ValueError, match="must be positive"):
+        OrderLine(product_id=1, quantity=-5)
+```
+
+**Access the exception for detailed assertions:**
+
+```python
+def test_validation_error_contains_field():
+    with pytest.raises(ValidationError, match="invalid email") as exc_info:
+        validate_email("not-an-email")
+
+    assert exc_info.value.field == "email"
+    assert "not-an-email" in str(exc_info.value)
+```
+
+**For multiple exception types:**
+
+```python
+def test_parse_handles_malformed_input():
+    with pytest.raises((ValueError, TypeError)):
+        parse_config("{{invalid")
+```
+
+---
+
 ## Fixture Composition with DI
 
 **Fixtures compose dependencies exactly like production code.**
@@ -376,6 +407,14 @@ def test_user_response(snapshot):
 ```
 
 **Prefer explicit assertions for core behavior.** Snapshots complement — not replace — targeted tests.
+
+**In CI, fail on mismatches — never auto-update:**
+
+```bash
+pytest --snapshot-warn-unused  # Fail if snapshots aren't verified
+```
+
+Review snapshot updates carefully in PRs. It's easy to `--snapshot-update` without noticing unintended changes.
 
 ---
 
