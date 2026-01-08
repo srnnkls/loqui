@@ -40,6 +40,38 @@ Tests are first-class code. They follow the same standards as production:
 
 ---
 
+## Given / When / Then
+
+**Structure tests as three distinct phases.**
+
+```python
+def test_user_registration(user_service: UserService, email_sender: FakeEmailSender):
+    # given
+    email = "alice@example.com"
+
+    # when
+    user = user_service.register(email)
+
+    # then
+    assert user.email == email
+    assert email_sender.sent_to(email)
+```
+
+Phase comments are optional when structure is obvious from whitespace:
+
+```python
+def test_parse_tag(parser: TagParser):
+    raw = '{"key": "env", "value": "prod"}'
+
+    tag = parser.parse(raw)
+
+    assert tag == Tag("env", "prod")
+```
+
+**Keep "when" to ONE action.** Multiple actions usually means multiple tests.
+
+---
+
 ## Fixture Composition with DI
 
 **Fixtures compose dependencies exactly like production code.**
@@ -102,13 +134,25 @@ def test_parse_tag(input, expected):
 
 ---
 
-## Protocol-Based Test Doubles
+## Test Doubles and Architecture
+
+**Needing many mocks often signals tight coupling.** Good architecture (ports & adapters, dependency injection) makes fakes natural and mocks unnecessary.
+
+| Use Fakes | Use Mocks |
+|-----------|-----------|
+| Testing behavior across boundaries | Verifying specific call sequences |
+| Dependency is slow/external | Testing precise failure modes |
+| Tests should survive refactoring | Temporary scaffolding during TDD |
+
+**Fakes test behavior; mocks test implementation.** If you're mocking internals, the boundary may be wrong.
+
+### Protocol-Based Fakes
 
 **Test doubles implement protocols structurally. No inheritance.**
 
 ```python
-# ✓ CORRECT: Mock implements protocol
-class MockStorage:
+# ✓ CORRECT: Fake implements protocol
+class FakeStorage:
     """Implements StorageBackend protocol structurally."""
     def __init__(self):
         self.data: dict[str, bytes] = {}
@@ -124,6 +168,21 @@ class MockStorage:
 # ✘ WRONG: Using unittest.mock
 storage = Mock(spec=StorageBackend)  # Untyped, error-prone
 ```
+
+### When Mocks Are Appropriate
+
+```python
+# ✓ OK: Mock for verifying external call was made correctly
+def test_sends_notification(notification_service: Mock):
+    handler.process(event)
+
+    notification_service.send.assert_called_once_with(
+        recipient="admin@example.com",
+        message="Event processed",
+    )
+```
+
+Use `unittest.mock` sparingly: for verifying interactions with true external boundaries (APIs, message queues) where call verification matters more than behavior.
 
 ---
 
@@ -167,6 +226,31 @@ async def test_fetch_concurrent():
     results = await fetch_all(["url1", "url2"])
     assert len(results) == 2
 ```
+
+---
+
+## Property-Based Testing
+
+**Use Hypothesis for invariant validation and edge case discovery.**
+
+See [hypothesis.md](hypothesis.md) for comprehensive patterns.
+
+```python
+from hypothesis import given, strategies as st
+
+@given(st.lists(st.integers()))
+def test_sort_preserves_length(xs: list[int]):
+    assert len(sorted(xs)) == len(xs)
+
+@given(st.lists(st.integers(), min_size=1))
+def test_sort_first_is_minimum(xs: list[int]):
+    assert sorted(xs)[0] == min(xs)
+```
+
+**Key rules:**
+- Test properties (invariants), not specific input/output pairs
+- Combine with fixtures: Hypothesis generates data, fixtures provide dependencies
+- NEVER use `random` in hypothesis tests — let Hypothesis control randomness
 
 ---
 
@@ -235,21 +319,26 @@ def test_join_with_empty_table():
 
 ## Summary
 
+- **DO** structure tests as Given / When / Then
 - **DO** compose fixtures via DI like production code
 - **DO** use frozen dataclasses for test cases
 - **DO** implement protocols structurally for test doubles
+- **DO** prefer fakes over mocks — mocks often signal tight coupling
 - **DO** use yield fixtures for resource cleanup
-- **DO** test validation failures and edge cases
-- **DO** use AAA pattern (Arrange-Act-Assert)
+- **DO** use Hypothesis for property-based testing of invariants
 - **DON'T** test dataclass/pytest infrastructure
 - **DON'T** test implementation details or internal structure
 - **DON'T** use `unittest.mock.Mock` for typed protocols
-- **DON'T** write obvious docstrings restating test names
 - **NEVER** use `random` inside hypothesis tests
 
 ---
+
+## Related
+
+- [hypothesis.md](hypothesis.md) — Property-based testing patterns
 
 ## References
 
 - [Python Testing with pytest](https://github.com/jashburn8020/python-testing-with-pytest) - Comprehensive pytest patterns
 - [pytest Documentation](https://docs.pytest.org/) - Official reference
+- [Hypothesis Documentation](https://hypothesis.readthedocs.io/) - Property-based testing
