@@ -94,6 +94,59 @@ pub use error::{Error, Result};
 
 Users import from the crate root, not internal module paths.
 
+### Future-Proof Public APIs
+
+**Use `#[non_exhaustive]` and sealed traits to allow evolution.**
+
+```rust
+use std::time::Duration;
+
+// ✓ CORRECT: Non-exhaustive enum allows adding variants
+#[non_exhaustive]
+pub enum Error {
+    NotFound,
+    PermissionDenied,
+    // Future: can add variants without breaking downstream
+}
+
+// ✓ CORRECT: Non-exhaustive struct allows adding fields
+#[non_exhaustive]
+pub struct Config {
+    pub timeout: Duration,
+    pub retries: u32,
+    // Future: can add fields without breaking downstream
+}
+
+impl Config {
+    // Provide constructor since struct literals won't work externally
+    pub fn new(timeout: Duration) -> Self {
+        Self { timeout, retries: 3 }
+    }
+}
+
+// ✓ CORRECT: Sealed trait prevents external implementations
+mod private {
+    pub trait Sealed {}
+}
+
+pub trait Backend: private::Sealed {
+    fn execute(&self, query: &str) -> Result<(), Error>;
+}
+
+// Only types in this crate can implement Backend
+pub struct PostgresBackend;
+impl private::Sealed for PostgresBackend {}
+impl Backend for PostgresBackend {
+    fn execute(&self, _query: &str) -> Result<(), Error> { Ok(()) }
+}
+```
+
+| Pattern | Use When |
+|---------|----------|
+| `#[non_exhaustive]` enum | Public error types, status codes, options |
+| `#[non_exhaustive]` struct | Configuration, options with future expansion |
+| Sealed trait | Trait where you control all implementations |
+
 ### Prefer Small, Focused Crates
 
 **Single responsibility. Easy to understand and test.**
@@ -210,29 +263,31 @@ Feature naming: use the dependency name directly, not `use-serde` or `with-serde
 
 ### Module File Patterns
 
-**Prefer `module.rs` over `module/mod.rs` for leaf modules.**
+**Avoid unnecessary nesting. Both `foo.rs` and `foo/mod.rs` are valid.**
 
 ```
-# ✓ PREFERRED: Flat files for simple modules
+# ✓ PREFERRED: Flat files for leaf modules
 src/
 ├── lib.rs
 ├── auth.rs        # Simple module
 ├── storage.rs     # Simple module
-└── api/           # Complex module with submodules
+└── api/           # Directory only because it has submodules
     ├── mod.rs
     ├── handlers.rs
     └── middleware.rs
 
-# ✘ AVOID: mod.rs for everything
+# ✓ ALSO OK: Directory style (team preference)
 src/
 ├── lib.rs
 ├── auth/
-│   └── mod.rs     # Unnecessary nesting
-└── storage/
-    └── mod.rs     # Unnecessary nesting
+│   └── mod.rs     # Acceptable if team prefers consistency
+└── api/
+    ├── mod.rs
+    ├── handlers.rs
+    └── middleware.rs
 ```
 
-Use directories only when a module has submodules.
+The goal is avoiding unnecessary depth, not enforcing a specific style. Pick one approach per project and stay consistent. Don't bikeshed layout—focus on logical organization.
 
 ## Summary
 
@@ -241,6 +296,8 @@ Use directories only when a module has submodules.
 - **DO** organize by feature/domain
 - **DO** use `pub(crate)` for internal APIs
 - **DO** reexport public API from crate root
+- **DO** use `#[non_exhaustive]` for public enums/structs that may grow
+- **DO** use sealed traits when you must control implementations
 - **DO** prefer small, focused crates in workspaces
 - **DO** contain unsafe in minimal modules with safe wrappers
 - **DO** use Cargo features for optional functionality

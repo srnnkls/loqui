@@ -13,11 +13,38 @@ Guidelines for writing and reviewing unsafe code.
 **Keep unsafe blocks minimal. Provide safe abstractions.**
 
 ```rust
-// ✓ CORRECT: Minimal unsafe, safe wrapper
-pub fn get_unchecked(slice: &[u8], index: usize) -> u8 {
-    // SAFETY: Caller guarantees index < slice.len()
-    // We document this requirement and trust the caller
-    unsafe { *slice.get_unchecked(index) }
+// ✓ CORRECT: Safe wrapper that encapsulates raw pointer handling
+use std::ptr::NonNull;
+use std::marker::PhantomData;
+
+pub struct RawSlice<T> {
+    ptr: NonNull<T>,
+    len: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> RawSlice<T> {
+    /// Creates a slice view from a raw pointer.
+    ///
+    /// # Safety
+    /// - `ptr` must be non-null and properly aligned for `T`
+    /// - `ptr` must be valid for reads of `len * size_of::<T>()` bytes
+    ///   for the lifetime of the returned `RawSlice`
+    /// - `len * size_of::<T>()` must not exceed `isize::MAX`
+    /// - The memory must not be mutated while this slice exists
+    pub unsafe fn from_raw(ptr: *const T, len: usize) -> Self {
+        Self {
+            ptr: NonNull::new_unchecked(ptr as *mut T),
+            len,
+            _marker: PhantomData,
+        }
+    }
+
+    // Safe API: internal unsafe is minimal and auditable
+    pub fn as_slice(&self) -> &[T] {
+        // SAFETY: Invariants established by from_raw()
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
 }
 
 // ✘ WRONG: Large unsafe block
@@ -26,15 +53,44 @@ unsafe fn do_everything(ptr: *mut u8, len: usize) {
     // Which operations actually need unsafe?
 }
 
-// ✓ CORRECT: Isolate unsafe operations
+// ✓ CORRECT: Isolate unsafe to the boundary
 fn do_everything_safe(ptr: *mut u8, len: usize) {
     let slice = unsafe {
-        // SAFETY: ptr is valid for len bytes (documented precondition)
+        // SAFETY: Caller ensures ptr is valid for len bytes
         std::slice::from_raw_parts_mut(ptr, len)
     };
 
-    // Rest is safe Rust
+    // Rest is safe Rust - no unsafe needed
     process_slice(slice);
+}
+```
+
+**Don't reimplement safe APIs with unsafe:**
+
+```rust
+// ✘ WRONG: This is just slice.get() with extra risk
+fn bad_get(slice: &[u8], i: usize) -> Option<u8> {
+    if i < slice.len() {
+        Some(unsafe { *slice.get_unchecked(i) })
+    } else {
+        None
+    }
+}
+
+// ✓ CORRECT: Use the safe API
+fn good_get(slice: &[u8], i: usize) -> Option<u8> {
+    slice.get(i).copied()
+}
+
+// ✓ CORRECT: get_unchecked can win when bounds are proven once, used many times
+fn sum_range(slice: &[u8], start: usize, end: usize) -> u8 {
+    assert!(end <= slice.len() && start <= end);
+    let mut sum = 0u8;
+    for i in start..end {
+        // SAFETY: assert above guarantees i < end <= len
+        sum = sum.wrapping_add(unsafe { *slice.get_unchecked(i) });
+    }
+    sum
 }
 ```
 

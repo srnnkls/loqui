@@ -60,31 +60,38 @@ fn main() {
 
 Borrowed types accept more input types through deref coercion.
 
-### Never Clone to Satisfy the Borrow Checker
+### Restructure Before Cloning
 
-**If you're cloning to make the borrow checker happy, restructure your code instead.**
+**If you're cloning to make the borrow checker happy, restructure your code first.**
 
 ```rust
-// ✘ WRONG: Clone to avoid borrow conflict
+// ✘ WRONG: Clone mid-expression to avoid borrow conflict
 fn bad_update(data: &mut Data) {
-    let key = data.current_key.clone();  // Clone to satisfy borrow checker
+    let key = data.current_key.clone();  // Clone just to split the borrow
     data.map.insert(key, compute_value());
 }
 
-// ✓ CORRECT: Restructure to avoid the conflict
+// ✓ CORRECT: Restructure to minimize the clone's scope
 fn good_update(data: &mut Data) {
-    let value = compute_value();  // Compute first
-    data.map.insert(data.current_key.clone(), value);  // Or use entry API
+    let value = compute_value();  // Compute first, before borrowing data
+    data.map.insert(data.current_key.clone(), value);
 }
 
 // ✓ BETTER: Use entry API for maps
 fn better_update(data: &mut Data) {
+    // Clone is still needed (map requires owned key), but code is cleaner
     data.map.entry(data.current_key.clone())
         .or_insert_with(compute_value);
 }
 ```
 
-Cloning hides the real problem. Fix the structure, not the symptom.
+Restructure first. Clone when the data structure genuinely requires ownership.
+
+**When cloning is appropriate:**
+- Data structure requires owned values (HashMap keys, thread spawns)
+- Shared ownership is the intent (`Arc::clone` for concurrent access)
+- Type is `Copy` or explicitly cheap to clone (`Rc::clone`, small structs)
+- Cloning simplifies lifetime management at module boundaries
 
 ### Use `mem::take` and `mem::replace` for In-Place Mutation
 
@@ -255,7 +262,7 @@ struct OverEngineered {
 
 ## Summary
 
-- **NEVER** clone to satisfy the borrow checker (restructure code instead)
+- **DO** restructure code before resorting to clone
 - **NEVER** use `Rc<RefCell<T>>` as a default pattern (indicates design issue)
 - **DO** let callers decide ownership (take or borrow based on need)
 - **DO** use borrowed types in arguments (`&str`, `&[T]`, `&T`)

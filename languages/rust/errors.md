@@ -36,12 +36,12 @@ fn load_config_bad(path: &Path) -> Config {
 
 Never `.unwrap()` or `.expect()` in library code. Let callers decide how to handle errors.
 
-### Prefer Explicit Handling Over `?`
+### Add Context When Propagating Errors
 
-**The `?` operator is convenient but loses context. Prefer explicit handling.**
+**Bare `?` loses context. Add information that aids debugging.**
 
 ```rust
-// ✘ PROBLEMATIC: ? loses context
+// ✘ PROBLEMATIC: Bare ? loses context
 fn process_file(path: &Path) -> Result<Data, Error> {
     let content = fs::read_to_string(path)?;  // Which file failed?
     let parsed = parse(&content)?;            // Parse of what?
@@ -49,7 +49,7 @@ fn process_file(path: &Path) -> Result<Data, Error> {
     Ok(validated)
 }
 
-// ✓ BETTER: Explicit handling preserves context
+// ✓ CORRECT: Add context with .map_err()
 fn process_file(path: &Path) -> Result<Data, Error> {
     let content = fs::read_to_string(path)
         .map_err(|e| Error::ReadFile { path: path.to_owned(), source: e })?;
@@ -76,12 +76,22 @@ fn process_file(path: &Path) -> Result<Data, Error> {
 }
 ```
 
-**When `?` is acceptable:**
+**Decision table for error propagation:**
+
+| Context | Approach | Example |
+|---------|----------|---------|
+| **App code + anyhow** | `?` with `.context()` | `fs::read(p).context("reading config")?` |
+| **Library + thiserror** | Bare `?` if `From` adds context | `parse(s)?` where `ParseError` captures input |
+| **Library + generic error** | `.map_err()` to add context | `.map_err(\|e\| Error::Io { path, source: e })?` |
+| **Need to recover** | `match` for specific variants | `match result { Err(e) if recoverable => ... }` |
+| **Internal helpers** | Bare `?` is fine | Context is obvious from call site |
+
+**When bare `?` is acceptable:**
 - Error type has `From` impls that preserve context (see [Error Handling in Rust](https://burntsushi.net/rust-error-handling/))
 - Internal helper functions where context is obvious
 - With `.context()` from `anyhow` in application code
 
-**When to use explicit `match` or `.map_err()`:**
+**When to use `match` or `.map_err()`:**
 - Different error variants need different handling
 - You want to recover from specific errors
 - You need to add context (path, operation, input value)
@@ -91,19 +101,19 @@ fn process_file(path: &Path) -> Result<Data, Error> {
 **Never use `()` as an error type. Implement `std::error::Error`.**
 
 ```rust
-// ✓ CORRECT: Meaningful error type
+// ✓ CORRECT: Meaningful error type with context
 #[derive(Debug)]
 pub enum ConfigError {
-    Io(std::io::Error),
-    Parse(toml::de::Error),
+    Io { path: PathBuf, source: std::io::Error },
+    Parse { source: toml::de::Error },
     Validation(String),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "failed to read config: {e}"),
-            Self::Parse(e) => write!(f, "invalid config format: {e}"),
+            Self::Io { path, source } => write!(f, "failed to read {}: {source}", path.display()),
+            Self::Parse { source } => write!(f, "invalid config format: {source}"),
             Self::Validation(msg) => write!(f, "config validation failed: {msg}"),
         }
     }
@@ -112,8 +122,8 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(e) => Some(e),
-            Self::Parse(e) => Some(e),
+            Self::Io { source, .. } => Some(source),
+            Self::Parse { source } => Some(source),
             Self::Validation(_) => None,
         }
     }
@@ -252,7 +262,7 @@ fn main() {
     let config = load_config("config.toml").unwrap();  // You're the only user
 }
 
-// ✓ OK: Doc examples (contested - see quality.md)
+// ✓ OK: Doc examples (see quality.md for house style)
 /// ```
 /// let result = parse("input").unwrap();  // Focus on the API, not error handling
 /// ```
@@ -382,12 +392,11 @@ fn main() -> Result<()> {
 
 **Error handling:**
 - **DO** return `Result` for operations that can fail expectedly
-- **DO** prefer explicit `match` or `.map_err()` over bare `?`
-- **DO** add context when converting errors (path, operation, input)
+- **DO** add context when propagating errors (path, operation, input)
+- **DO** use `.map_err()` or `match` to add context before `?`
 - **DO** implement `std::error::Error` for error types
 - **DO** use `thiserror` for library error types
 - **DO** use `anyhow` with `.context()` in application code
-- **DON'T** use bare `?` without context-preserving `From` impls
 - **NEVER** use `()` as an error type
 
 **Panicking:**

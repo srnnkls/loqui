@@ -201,6 +201,46 @@ pub struct Config {
 | `Default` | When there's a sensible default value |
 | `Serialize`/`Deserialize` | For data interchange (feature-gated) |
 
+### Use `Cow` for Flexible Ownership
+
+**`Cow<'a, T>` defers cloning until mutation is needed.**
+
+```rust
+use std::borrow::Cow;
+
+// ✓ CORRECT: Return Cow to avoid allocation when possible
+fn normalize_path(path: &str) -> Cow<'_, str> {
+    if path.contains("//") {
+        Cow::Owned(path.replace("//", "/"))  // Must allocate
+    } else {
+        Cow::Borrowed(path)  // No allocation
+    }
+}
+
+// ✓ CORRECT: Accept Cow when caller may already own data
+fn log_message(msg: Cow<'_, str>) {
+    println!("{}", msg);
+    // Cow::Owned("...".to_string()) - no extra clone, caller's String reused
+    // Cow::Borrowed("...") - no allocation, just borrows
+}
+
+// ✓ CORRECT: Cow shines when mutation is conditional
+fn maybe_uppercase(s: Cow<'_, str>) -> Cow<'_, str> {
+    if s.chars().any(|c| c.is_lowercase()) {
+        Cow::Owned(s.to_uppercase())  // Clone + transform
+    } else {
+        s  // Pass through unchanged, no allocation
+    }
+}
+```
+
+| Type | When to Use |
+|------|-------------|
+| `&str` | Read-only access, caller owns the data |
+| `String` | Function needs ownership, will store or modify |
+| `Cow<'_, str>` | May return borrowed or owned; may skip allocation |
+| `impl Into<String>` | Always needs owned, let caller decide how |
+
 ### Use `bitflags` for Flag Sets
 
 **Don't use enums with bit values. Use the `bitflags` crate.**

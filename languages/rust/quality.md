@@ -114,27 +114,25 @@ Examples show **why** to use something, not just **how** to call it.
 
 ### Doc Examples: `?` vs `unwrap`
 
-**There are two positions:**
-
-1. **Rust API Guidelines**: Use `?` - examples are copied, model good practices
-2. **BurnSushi**: `unwrap` is fine - examples shouldn't be overburdened by error handling
+**House style: Use `unwrap()` in doc examples unless error handling is the point.**
 
 ```rust
-// Position 1: ? with boilerplate
+// ✓ PREFERRED: unwrap keeps focus on the API
+/// ```
+/// let config = Config::parse("key=value").unwrap();
+/// assert_eq!(config.get("key"), Some("value"));
+/// ```
+
+// ✓ OK: ? when showing error handling patterns
 /// ```
 /// # fn main() -> Result<(), Box<dyn Error>> {
 /// let config = Config::parse("key=value")?;
 /// #     Ok(())
 /// # }
 /// ```
-
-// Position 2: unwrap - clearer focus
-/// ```
-/// let config = Config::parse("key=value").unwrap();
-/// ```
 ```
 
-**Pragmatic approach:** If error handling obscures what you're demonstrating, use `unwrap`. If error handling is a fundamental part of the API being shown, use `?`.
+**Rationale:** Doc examples demonstrate API usage, not error handling. Boilerplate (`# fn main()`, `# Ok(())`) obscures the example. For when `unwrap` is appropriate in production code, see [errors.md](errors.md#when-unwrapexpect-is-acceptable).
 
 ### Document Errors, Panics, Safety
 

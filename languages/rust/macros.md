@@ -225,6 +225,36 @@ macro_rules! validated_struct {
 }
 ```
 
+**For proc-macros, use `syn::Error` for spanned diagnostics:**
+
+```rust
+use proc_macro::TokenStream;
+use syn::{parse_macro_input, DeriveInput, Error};
+use quote::quote;
+
+#[proc_macro_derive(MyDerive)]
+pub fn my_derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match my_derive_impl(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(e) => e.to_compile_error().into(),  // Preserves span for IDE
+    }
+}
+
+fn my_derive_impl(input: &DeriveInput) -> Result<proc_macro2::TokenStream, Error> {
+    if input.generics.params.is_empty() {
+        return Err(Error::new_spanned(
+            &input.ident,
+            "MyDerive requires at least one generic parameter"
+        ));
+    }
+    Ok(quote! { /* ... */ })
+}
+```
+
+`Error::new_spanned` attaches the error to specific tokens, so IDEs highlight the exact problem location.
+
 ### Procedural Macros: Minimize Dependencies
 
 **Keep proc-macro crates lean.**

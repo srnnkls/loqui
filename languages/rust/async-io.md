@@ -52,9 +52,41 @@ async fn read_file(path: &Path) -> Result<String, Error> {
 async fn read_file_blocking(path: PathBuf) -> Result<String, Error> {
     tokio::task::spawn_blocking(move || {
         std::fs::read_to_string(&path)
-    }).await?
+    }).await??  // Outer ? propagates JoinError, inner ? propagates io::Error
 }
 ```
+
+### Avoid Holding Locks Across `.await`
+
+**Standard `Mutex` guards block other tasks on the same executor thread.**
+
+```rust
+use std::sync::Mutex;
+
+// ✘ WRONG: Lock held across await point
+async fn bad_update(state: &Mutex<State>) {
+    let mut guard = state.lock().unwrap();
+    let data = fetch_data().await;  // Other tasks on this thread can't acquire lock!
+    guard.value = data;
+}
+
+// ✓ CORRECT: Scope the lock, then await
+async fn good_update(state: &Mutex<State>) {
+    let current = state.lock().unwrap().value.clone();  // Lock released here
+    let data = fetch_data_based_on(current).await;
+    state.lock().unwrap().value = data;  // Re-acquire briefly
+}
+
+// ✓ OK: tokio::sync::Mutex when you genuinely need lock across await
+use tokio::sync::Mutex as AsyncMutex;
+
+async fn async_mutex_update(state: &AsyncMutex<State>) {
+    let mut guard = state.lock().await;
+    guard.value = fetch_data().await;  // Allowed, but consider if you really need this
+}  // Caution: holding locks across await can cause contention
+```
+
+Prefer restructuring to scope locks tightly. Use `tokio::sync::Mutex` only when the lock genuinely must span an await—it has higher overhead than `std::sync::Mutex`.
 
 ### Always Set Timeouts
 
@@ -241,6 +273,7 @@ async fn pub_sub() {
 ## Summary
 
 - **NEVER** block the async runtime with sync I/O or CPU work
+- **AVOID** holding `std::sync::Mutex` guards across `.await`
 - **NEVER** forget timeouts on network operations
 - **DO** use async only for I/O-bound operations
 - **DO** use `spawn_blocking` for CPU-bound or blocking work
