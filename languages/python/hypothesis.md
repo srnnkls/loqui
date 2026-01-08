@@ -117,6 +117,49 @@ def user_with_orders(draw: DrawFn) -> tuple[User, list[Order]]:
     return user, orders
 ```
 
+### Registering Type Strategies
+
+**Register strategies for domain types to use `st.from_type()` automatically.**
+
+```python
+# conftest.py
+from hypothesis import strategies as st
+
+st.register_type_strategy(
+    UserId,
+    st.integers(min_value=1).map(UserId),
+)
+
+st.register_type_strategy(
+    Email,
+    st.emails().map(Email),
+)
+
+st.register_type_strategy(
+    User,
+    st.builds(
+        User,
+        id=st.from_type(UserId),
+        email=st.from_type(Email),
+        name=st.text(min_size=1, max_size=100),
+    ),
+)
+```
+
+Now tests can use `st.from_type()` directly:
+
+```python
+@given(st.from_type(User))
+def test_user_serialization_roundtrip(user: User):
+    assert User.from_json(user.to_json()) == user
+
+@given(st.lists(st.from_type(User)))
+def test_bulk_operations(users: list[User]):
+    ...
+```
+
+Hypothesis also infers strategies for `@dataclass` and `attrs` classes automatically when all fields have registered or inferrable types.
+
 ---
 
 ## Pytest Integration
@@ -251,6 +294,76 @@ def test_division(a: int, b: int):
 def test_division(a: int, b: int):
     assert a / b * b == pytest.approx(a)
 ```
+
+---
+
+## Integrations and Plugins
+
+### NumPy
+
+```python
+from hypothesis.extra.numpy import arrays, array_shapes
+
+@given(arrays(dtype=np.float64, shape=(3, 3)))
+def test_matrix_transpose_involution(arr: np.ndarray):
+    assert np.array_equal(arr.T.T, arr)
+
+@given(arrays(dtype=np.int32, shape=array_shapes(min_dims=1, max_dims=3)))
+def test_flatten_preserves_elements(arr: np.ndarray):
+    assert arr.flatten().sum() == arr.sum()
+```
+
+### Pandas
+
+```python
+from hypothesis.extra.pandas import column, data_frames, series
+
+@given(series(dtype=int))
+def test_series_operations(s: pd.Series):
+    assert len(s.dropna()) <= len(s)
+
+@given(data_frames([
+    column("id", dtype=int, unique=True),
+    column("value", dtype=float),
+]))
+def test_dataframe_groupby(df: pd.DataFrame):
+    ...
+```
+
+### JSON Schema (hypothesis-jsonschema)
+
+```bash
+pip install hypothesis-jsonschema
+```
+
+```python
+from hypothesis_jsonschema import from_schema
+
+user_schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "age": {"type": "integer", "minimum": 0},
+    },
+    "required": ["name", "age"],
+}
+
+@given(from_schema(user_schema))
+def test_user_validation(data: dict):
+    user = User.from_dict(data)
+    assert user.name
+    assert user.age >= 0
+```
+
+### Other Useful Plugins
+
+| Plugin | Purpose |
+|--------|---------|
+| `hypothesis-jsonschema` | Generate data from JSON Schema |
+| `hypothesis-graphql` | Generate GraphQL queries |
+| `hypothesis-csv` | Generate CSV data |
+| `hypothesis-regex` | Better regex strategy |
+| `hypothesis-fspaths` | File system paths |
 
 ---
 
