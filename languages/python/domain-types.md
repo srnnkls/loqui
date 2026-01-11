@@ -89,6 +89,50 @@ This pattern implements **Algebraic Data Types (ADTs)** — also called sum type
 
 ADTs are native in Rust (`enum`) and ML-family languages. Python emulates them with union types + frozen dataclasses + `match`. The concept is the same: data, not behavior; closed set, not open hierarchy.
 
+### Literal vs StrEnum
+
+**The real trade-off:** `StrEnum` often leads to runtime conversion and enum objects where you often just want wire-compatible data.
+
+| Use case | Preference | Why |
+|----------|------------|-----|
+| Discriminated union tags | `Literal` | Wire-compatible, no conversion layer, validation at parse boundary |
+| Config constrained values | `StrEnum` | Need `list(OutputFormat)` for CLI help, runtime enumeration |
+
+**Literal shines when:**
+- The tag exists for schema discrimination and serialization stability
+- You want the data model close to the wire format
+- You're already validating at the parsing layer
+- You don't need to enumerate allowed values at runtime (or you maintain a separate list)
+
+**StrEnum shines when:**
+- You need a single runtime authority for allowed values (nice errors via `ActionType(raw)`)
+- You benefit from runtime affordances: iteration, `.name`, grouping helpers, methods
+- CLI tools need to enumerate valid options
+
+**Note on comparisons:** With `StrEnum`, `ActionType.CLICK == "click"` is `True` (it's a `str` subclass). You don't have to compare to `.value` everywhere — but StrEnum still creates enum objects in memory and encourages conversion at boundaries.
+
+**Hybrid pattern (Literals + Pydantic v2 discriminated union):**
+
+```python
+@dataclass(frozen=True, kw_only=True)
+class ClickStep:
+    action: Literal["click"] = "click"
+    selector: str
+
+@dataclass(frozen=True, kw_only=True)
+class FillStep:
+    action: Literal["fill"] = "fill"
+    selector: str
+    value: str
+
+Step = Annotated[ClickStep | FillStep, Field(discriminator="action")]
+
+StepsAdapter = TypeAdapter(list[Step])
+Steps = Annotated[list[Step], BeforeValidator(StepsAdapter.validate_python)]
+```
+
+Wire format uses strings, model uses `Literal`, Pydantic enforces allowed values via the discriminated union.
+
 ### USE Pydantic Field Constraints
 
 **At boundaries:**
@@ -155,6 +199,7 @@ def parse[T](data: str, parser: Callable[[str], T]) -> Result[T, ValueError]:
 - **DO** use Pydantic dataclasses at boundaries for validation
 - **DO** use plain frozen dataclasses internally after parsing
 - **DO** use discriminated unions with Literal types for variants
+- **DO** prefer `Literal` over `StrEnum` unless you need runtime enumeration
 - **DO** use `Field()` for validation constraints and documentation
 - **DO** make illegal states unrepresentable through types
 - **DO** parse permissive input to strict canonical types immediately
