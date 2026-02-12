@@ -26,7 +26,7 @@ Language-specific patterns, anti-patterns, and best practices for writing Rust c
 ### 1. Ownership is the Design
 **Types encode ownership semantics. Use them to express intent.**
 
-Borrow when you don't need ownership. Take ownership when you do. Never clone to satisfy the borrow checker.
+Borrow when you don't need ownership. Take ownership when you do. Avoid cloning as a borrow-checker escape hatch; clone deliberately when it reflects a real ownership boundary.
 
 ### 2. Parse Don't Validate
 **Convert at boundaries to validated types.**
@@ -91,6 +91,19 @@ Keep related types, traits, and functions together. Dependencies flow toward the
 pedantic = "warn"
 ```
 
+For public crates, consider starting with `clippy::all` and enabling pedantic lints selectively.
+
+Nursery lints are intentionally more volatile; enable them selectively after review rather than blanket-enabling the entire group:
+
+```toml
+[lints.clippy]
+pedantic = "warn"
+
+# Example: selectively enabled nursery lints
+cognitive_complexity = "warn"
+option_if_let_else = "warn"
+```
+
 ---
 
 ## Quick Anti-Patterns Checklist
@@ -98,7 +111,7 @@ pedantic = "warn"
 Flag these when writing or reviewing Rust code:
 
 **Ownership:**
-- ✘ Clone to satisfy borrow checker (restructure code instead)
+- ✘ Unnecessary clone to satisfy borrow checker (restructure code; clone only when ownership is required)
 - ✘ `Rc<RefCell<T>>` everywhere (usually indicates design issue)
 - ✘ Overuse of `'static` lifetimes (limits API flexibility)
 
@@ -114,7 +127,7 @@ Flag these when writing or reviewing Rust code:
 
 **Errors:**
 - ✘ `.unwrap()` for expected failures (use `Result`)
-- ✘ Bare `?` without context (use `.map_err()` or `match`)
+- ✘ Bare `?` at boundaries without context (use `.map_err()`, `match`, or `anyhow::Context`)
 - ✘ Empty error types like `Result<T, ()>`
 - ✘ Panic for recoverable errors
 

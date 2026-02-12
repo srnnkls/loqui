@@ -10,7 +10,7 @@ Ownership, borrowing, lifetimes, and patterns for working with the borrow checke
 
 ### Caller Decides Ownership
 
-**Let the caller control where copies happen. Don't clone inside functions.**
+**Let the caller control where copies happen. Don't clone inside functions unless cloning is part of the API's ownership boundary.**
 
 ```rust
 // ✓ CORRECT: Take ownership when you need it
@@ -23,7 +23,7 @@ fn inspect(value: &str) {
     // use value as borrowed
 }
 
-// ✘ WRONG: Borrow then clone inside
+// ✘ WRONG: Borrow then clone inside as a hidden copy
 fn bad_consume(value: &String) {
     let owned = value.clone();  // Caller can't avoid this clone
     // use owned

@@ -38,10 +38,10 @@ Never `.unwrap()` or `.expect()` in library code. Let callers decide how to hand
 
 ### Add Context When Propagating Errors
 
-**Bare `?` loses context. Add information that aids debugging.**
+**Add context at boundaries. Use bare `?` when the error type already carries enough context or the call site is unambiguous.**
 
 ```rust
-// ✘ PROBLEMATIC: Bare ? loses context
+// ✘ PROBLEMATIC: Bare ? at a boundary loses context
 fn process_file(path: &Path) -> Result<Data, Error> {
     let content = fs::read_to_string(path)?;  // Which file failed?
     let parsed = parse(&content)?;            // Parse of what?
@@ -80,11 +80,11 @@ fn process_file(path: &Path) -> Result<Data, Error> {
 
 | Context | Approach | Example |
 |---------|----------|---------|
-| **App code + anyhow** | `?` with `.context()` | `fs::read(p).context("reading config")?` |
-| **Library + thiserror** | Bare `?` if `From` adds context | `parse(s)?` where `ParseError` captures input |
+| **App code + anyhow** | `?` with `.context()` / `.with_context()` | `fs::read(p).context("reading config")?` |
+| **Library + thiserror** | Bare `?` if the error already carries context | `parse(s)?` where `ParseError` includes details |
 | **Library + generic error** | `.map_err()` to add context | `.map_err(\|e\| Error::Io { path, source: e })?` |
 | **Need to recover** | `match` for specific variants | `match result { Err(e) if recoverable => ... }` |
-| **Internal helpers** | Bare `?` is fine | Context is obvious from call site |
+| **Internal helpers** | Bare `?` is fine | Helper name/call site provides context; usually a single, local usage |
 
 **When bare `?` is acceptable:**
 - Error type has `From` impls that preserve context (see [Error Handling in Rust](https://burntsushi.net/rust-error-handling/))
