@@ -181,6 +181,18 @@ keys := slices.Collect(maps.Keys(users))
 
 slog.Info("request", "method", r.Method, "path", r.URL.Path)
 
+// strings.Cut — cleaner than strings.Index + slicing (Go 1.18+)
+key, value, ok := strings.Cut("k=v", "=")
+
+// fmt.Appendf — zero-alloc formatting into an existing buffer (Go 1.19+)
+buf = fmt.Appendf(buf, "version=%d\n", n)
+
+// os.Root — sandboxed filesystem access, no path-traversal (Go 1.24+)
+root, err := os.OpenRoot("/var/data")
+if err != nil { return err }
+defer root.Close()
+f, err := root.Open("user-upload.txt")   // cannot escape /var/data
+
 // ✘ WRONG: hand-rolled when stdlib exists
 func sortInts(xs []int) []int {
     out := make([]int, len(xs))
@@ -189,6 +201,19 @@ func sortInts(xs []int) []int {
     return out
 }
 // Use slices.Clone + slices.Sort.
+
+// ✘ WRONG: []byte(fmt.Sprintf(...)) — extra allocation
+buf := []byte(fmt.Sprintf("v=%d", n))
+// Use fmt.Appendf(buf, "v=%d", n).
+
+// ✘ WRONG: strings.Index + slicing
+i := strings.Index(s, "=")
+if i >= 0 { k, v := s[:i], s[i+1:] }
+// Use strings.Cut.
+
+// ✘ WRONG: os.Open with filepath.Clean for user-supplied paths
+// — you'll get path traversal eventually
+// Use os.OpenRoot + root.Open.
 ```
 
 See [modernization.md](modernization.md) for the full migration table.
@@ -342,7 +367,7 @@ defer file.Close()
 - **DO** use consistent receiver names (1-2 letters)
 - **DO** check all errors immediately
 - **DO** use context.Context for cancellation
-- **DO** prefer stdlib (`slices`, `maps`, `slog`, `cmp`, `errors.Join`) over third-party
+- **DO** prefer stdlib (`slices`, `maps`, `slog`, `cmp`, `errors.Join`, `strings.Cut`, `fmt.Appendf`, `os.Root`) over third-party
 - **DO** prefer generics over `any` for uniform behavior
 - **DO** run `go fix ./...` before committing to apply modernizers
 - **DON'T** write comments that restate code

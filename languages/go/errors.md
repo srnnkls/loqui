@@ -141,6 +141,34 @@ if errors.As(err, &validationErr) {
 }
 ```
 
+### Type-Safe Unwrapping with `errors.AsType[T]` (Go 1.26+)
+
+**Go 1.26 introduced `errors.AsType[T]`, a generic replacement for the two-step `errors.As` dance.** It returns the extracted value directly instead of writing through a `**T` out-parameter.
+
+```go
+// ✘ OLD pattern — verbose and error-prone
+var notFound *NotFoundError
+if errors.As(err, &notFound) {
+    log.Println(notFound.Resource)
+}
+
+// ✓ Go 1.26+: single-expression, no pre-declaration
+if nf, ok := errors.AsType[*NotFoundError](err); ok {
+    log.Println(nf.Resource)
+}
+
+// Particularly clean inside switch / composite expressions:
+switch {
+case errors.Is(err, ErrNotFound):
+    // ...
+case {
+    ve, ok := errors.AsType[*ValidationError](err); ok && ve.Field == "email":
+    // handle validation on email
+}
+```
+
+Use `errors.AsType[T]` for new code in Go 1.26+; fall back to `errors.As` when supporting older toolchains.
+
 ### errors.Is vs errors.As
 
 **`errors.Is`: Check if error matches a sentinel error**
@@ -302,7 +330,7 @@ defer file.Close()  // Error ignored
 - **DO** use `var ErrName = errors.New("message")` for sentinel errors
 - **DO** create custom error types when errors need structured data
 - **DO** use `errors.Is` to check sentinel errors
-- **DO** use `errors.As` to extract error types
+- **DO** use `errors.As` — or `errors.AsType[T]` (Go 1.26+) for a cleaner single-expression form — to extract error types
 - **DO** use `errors.Join` (Go 1.20+) for multi-error collection — never `hashicorp/go-multierror`
 - **DO** use multiple `%w` verbs in `fmt.Errorf` when wrapping more than one cause
 - **DO** start error messages lowercase, no punctuation
@@ -326,6 +354,7 @@ defer file.Close()  // Error ignored
 - [Error Handling in Go](https://go.dev/blog/error-handling-and-go)
 - [Working with Errors in Go 1.13](https://go.dev/blog/go1.13-errors)
 - [Go 1.20 release notes — errors.Join](https://go.dev/doc/go1.20#errors) - multi-error stdlib
+- [Go 1.26 release notes — errors.AsType](https://go.dev/doc/go1.26) - generic type-safe unwrapping
 - [errors.Join documentation](https://pkg.go.dev/errors#Join)
 - [fmt.Errorf — multiple %w verbs](https://pkg.go.dev/fmt#Errorf)
 - [Don't just check errors, handle them gracefully](https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully)

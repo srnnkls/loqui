@@ -59,6 +59,8 @@ go fix -help
 - Old `for i := 0; i < n; i++` counters → `for range n` (1.22)
 - Shadow-copy `x := x` workarounds inside loops (obsolete since 1.22)
 - `interface{}` → `any`
+- `[]byte(fmt.Sprintf(…))` → `fmt.Appendf(…)` (`fmtappendf`)
+- `strings.Index` + slicing → `strings.Cut` (`stringscut`)
 - `sync.Once` + closure → `sync.OnceFunc` / `OnceValue` (1.21)
 - `tools.go` blank imports → `go.mod` tool directives (1.24)
 - `ptr[T]` helpers / address-of-literal hacks → `new(expr)` (1.26)
@@ -75,6 +77,8 @@ The 1.21–1.26 window moved a lot of ecosystem churn into stdlib. Before reachi
 |---|---|---|
 | `hashicorp/go-multierror` | `errors.Join` | 1.20 |
 | Single `%w` + manual concatenation | `fmt.Errorf` with multiple `%w` | 1.20 |
+| `[]byte(fmt.Sprintf(…))` | `fmt.Appendf(buf, …)` | 1.19 |
+| `i := strings.Index(s, sep)` + slicing | `strings.Cut(s, sep)` | 1.18 |
 | Hand-rolled sort with `sort.Slice` | `slices.SortFunc` | 1.21 |
 | `for _, x := range xs { if x == t ... }` | `slices.Contains` | 1.21 |
 | `map[K]struct{}` sets for dedup | `slices.Compact` after sort | 1.21 |
@@ -88,11 +92,15 @@ The 1.21–1.26 window moved a lot of ecosystem churn into stdlib. Before reachi
 | `x := x` inside range loops | Delete — 1.22 per-iteration scope fixes it | 1.22 |
 | Returning `[]T` when caller only iterates | `iter.Seq[T]` / `iter.Seq2[K,V]` | 1.23 |
 | Manual string interning | `unique.Make` | 1.23 |
+| Manual struct-layout fiddling | `structs` package | 1.23 |
 | `tools.go` blank imports | `go.mod` tool directive | 1.24 |
 | `context.WithCancel` in tests | `t.Context()` | 1.24 |
 | `b.N` loops in benchmarks | `testing.B.Loop` | 1.24 |
+| Ad-hoc path-traversal guards | `os.Root` / `os.OpenRoot` | 1.24 |
+| `runtime.SetFinalizer` | `runtime.AddCleanup` | 1.24 |
 | Concurrent tests with `time.Sleep` | `testing/synctest` | 1.24 (exp), 1.25 (GA) |
 | `ptr := func[T any](v T) *T { return &v }` | `new(expr)` | 1.26 |
+| `var x *Foo; errors.As(err, &x)` | `errors.AsType[*Foo](err)` | 1.26 |
 
 ---
 
@@ -184,6 +192,14 @@ func Entries[K comparable, V any](m map[K]V) iter.Seq2[K, V] { ... }
 // unique package for canonicalization
 import "unique"
 h := unique.Make("repeated string")  // all Make("repeated string") calls share storage
+
+// structs package — control struct memory layout
+import "structs"
+type Header struct {
+    _ structs.HostLayout   // opt in to host-native layout (for FFI / OS structs)
+    Magic uint32
+    Size  uint32
+}
 ```
 
 ### Go 1.24 (Feb 2025)
@@ -220,6 +236,17 @@ synctest.Run(func() {
 
 // Swiss-table map internals — maps are now ~30% faster with no API change
 // weak package — weak pointers for caches
+
+// os.Root — sandboxed filesystem access (no path-traversal escapes)
+root, err := os.OpenRoot("/var/data")
+if err != nil { return err }
+defer root.Close()
+f, err := root.Open("user-upload.txt")   // cannot escape /var/data
+
+// runtime.AddCleanup — safer alternative to SetFinalizer
+runtime.AddCleanup(&obj, func(id uint64) {
+    closeResource(id)
+}, obj.ID)
 ```
 
 ### Go 1.25 (Aug 2025)
@@ -243,7 +270,17 @@ deadline := new(time.Now().Add(5 * time.Second))   // *time.Time
 // Recursive generic type parameters — a type parameter can now reference itself
 // in its own constraint, enabling cleaner builder/fluent patterns and self-referencing
 // data structures.
+
+// errors.AsType[T] — type-safe single-expression unwrapping
+if nf, ok := errors.AsType[*NotFoundError](err); ok {
+    log.Println(nf.Resource)
+}
+// Replaces: var nf *NotFoundError; errors.As(err, &nf); if nf != nil { … }
 ```
+
+**Green Tea GC** is on by default in Go 1.26 — 10–40% reduction in GC overhead, with an extra ~10% on Intel Ice Lake / AMD Zen 4+. No opt-in required; just upgrade.
+
+**`go fix` was rewritten in Go 1.26** as the canonical home for modernizers. Run `go fix ./...` after every toolchain bump.
 
 ---
 
@@ -283,6 +320,11 @@ Repeat this after every toolchain bump and after any large AI-generated change.
 - **DO** replace `b.N` benchmark loops with `testing.B.Loop` (1.24+)
 - **DO** use `t.Context()` in tests (1.24+) instead of building a fresh `context.Background`
 - **DO** use `new(expr)` (1.26+) instead of `ptr[T]` helpers
+- **DO** use `errors.AsType[T]` (1.26+) instead of the `var x; errors.As(err, &x)` two-step
+- **DO** use `fmt.Appendf` (1.19+) instead of `[]byte(fmt.Sprintf(…))`
+- **DO** use `strings.Cut` (1.18+) instead of `strings.Index` + slicing
+- **DO** use `os.Root` / `os.OpenRoot` (1.24+) for sandboxed filesystem access
+- **DO** use `runtime.AddCleanup` (1.24+) instead of `runtime.SetFinalizer`
 - **DON'T** reach for `hashicorp/go-multierror` — `errors.Join` exists
 - **DON'T** keep `tools.go` files — migrate to `go.mod` tool directives
 - **DON'T** copy `x := x` shadowing patterns forward — Go 1.22 fixed the underlying issue
@@ -306,7 +348,9 @@ Repeat this after every toolchain bump and after any large AI-generated change.
 - [Go 1.21 release notes](https://go.dev/doc/go1.21) - `slices`, `maps`, `slog`, `min`/`max`/`clear`
 - [Go 1.22 release notes](https://go.dev/doc/go1.22) - Loop semantics, `for range N`
 - [Go 1.23 release notes](https://go.dev/doc/go1.23) - Iterators, `iter.Seq`
-- [Go 1.24 release notes](https://go.dev/doc/go1.24) - Tool directives, `testing.B.Loop`, generic aliases
+- [Go 1.24 release notes](https://go.dev/doc/go1.24) - Tool directives, `testing.B.Loop`, generic aliases, `os.Root`, `runtime.AddCleanup`
+- [Go 1.26 release notes](https://go.dev/doc/go1.26) - `new(expr)`, `errors.AsType`, Green Tea GC, revamped `go fix`
+- [Using `go fix` to modernize code](https://go.dev/blog/gofix) - Alan Donovan on the 1.26 modernizer rewrite
 - [log/slog blog post](https://go.dev/blog/slog) - Structured logging rationale
 - [Range-over-func proposal](https://go.dev/blog/range-functions) - Iterator design
-- [go-modern-guidelines (JetBrains)](https://github.com/JetBrains/go-modern-guidelines) - AI-drift mitigation
+- [go-modern-guidelines (JetBrains)](https://github.com/JetBrains/go-modern-guidelines) - AI-drift mitigation plugin for Claude Code
