@@ -230,6 +230,37 @@ fn confusing<'a, 'b, 'c>(x: &'a Foo<'b>, y: &'c Bar) -> &'a Baz<'b, 'c>
 
 Let lifetime elision handle simple cases. Add explicit lifetimes when the relationships matter.
 
+### RPIT Lifetime Capture (2024 Edition)
+
+**In the 2024 edition, return-position `impl Trait` automatically captures all in-scope lifetime parameters** — matching what `async fn` has always done. The old `Captures<'a>` workaround disappears; `+ use<…>` gives you precise control when you need it.
+
+```rust
+// ✘ Rust 2021: required the Captures trick
+trait Captures<'a> {}
+impl<'a, T> Captures<'a> for T {}
+
+fn iter_2021<'a>(s: &'a [u8]) -> impl Iterator<Item = u8> + Captures<'a> {
+    s.iter().copied()
+}
+
+// ✓ Rust 2024: auto-captures 'a, just works
+fn iter_2024<'a>(s: &'a [u8]) -> impl Iterator<Item = u8> {
+    s.iter().copied()
+}
+
+// ✓ Narrow capture: explicit list of what to capture
+fn keys<'a, K, V>(map: &'a HashMap<K, V>) -> impl Iterator<Item = &'a K> + use<'a, K, V> {
+    map.keys()
+}
+
+// ✓ Opt out entirely: no lifetime capture
+fn numbers() -> impl Iterator<Item = u8> + use<> {
+    0..10
+}
+```
+
+**Migration tip:** `cargo fix --edition` rewrites the common cases. See [edition.md](edition.md) for the full edition migration guide.
+
 ### Prefer References Over Smart Pointers
 
 **Use `Rc`/`Arc` only when shared ownership is genuinely needed.**
@@ -270,8 +301,10 @@ struct OverEngineered {
 - **DO** return consumed arguments in error types
 - **DO** decompose structs for independent borrowing
 - **DO** use explicit lifetimes when they clarify relationships
+- **DO** rely on 2024-edition RPIT auto-capture; use `+ use<…>` only to narrow or opt out
 - **DON'T** overuse `'static` (limits API flexibility)
 - **DON'T** add lifetime parameters unnecessarily (let elision work)
+- **DON'T** keep the `Captures<'a>` workaround in 2024-edition code
 
 ---
 
@@ -280,9 +313,11 @@ struct OverEngineered {
 - [types.md](types.md) - Designing types that encode ownership semantics
 - [traits.md](traits.md) - Trait bounds and generic ownership patterns
 - [errors.md](errors.md) - Error types that preserve ownership
+- [edition.md](edition.md) - 2024 edition RPIT and tail-expr drop-scope changes
 
 ## References
 
 - [The Rust Book: Ownership](https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html)
 - [Rust API Guidelines: Flexibility](https://rust-lang.github.io/api-guidelines/flexibility.html)
 - [Rust Design Patterns: mem::take](https://rust-unofficial.github.io/patterns/idioms/mem-replace.html)
+- [RFC 3498 — RPIT lifetime capture 2024](https://rust-lang.github.io/rfcs/3498-lifetime-capture-rules-2024.html)

@@ -251,6 +251,87 @@ fn test_with_fixture(client: Client) {
 }
 ```
 
+### Shared Fixtures with `LazyLock`
+
+**For expensive setup shared across tests**, use `LazyLock` (1.80+) — no more `lazy_static!` in test modules.
+
+```rust
+use std::sync::LazyLock;
+
+static TEST_DB: LazyLock<TestDb> = LazyLock::new(|| {
+    TestDb::spawn().expect("test db to start")
+});
+
+#[test]
+fn fetches_user() {
+    let conn = TEST_DB.connection();
+    // ...
+}
+```
+
+Note: tests run in parallel by default. A `LazyLock<TestDb>` shared across tests must support concurrent access or you'll need per-test isolation (transactions, unique schemas).
+
+### `#[expect(lint)]` in Tests
+
+Inside `#[cfg(test)]` modules, use `#[expect(lint, reason = "…")]` to suppress warnings — and get a warning if the suppression becomes stale.
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "tests fail loudly on unexpected None")]
+    fn parses_known_good() {
+        let v = parse("valid").unwrap();
+        assert_eq!(v, 42);
+    }
+}
+```
+
+### Cross-Compiled Doctests (Rust 1.89+)
+
+`cargo test --target <triple>` now runs doctests under the specified target. If your doctests exercise platform-specific code (e.g. `#[cfg(target_os = "…")]`), they're now covered by cross-target CI.
+
+## Test Tooling
+
+### `cargo nextest` — The Modern Default
+
+**`cargo nextest run`** is a drop-in replacement for `cargo test` with materially better UX: parallel test processes (not just threads), per-test timeouts, retries for flaky tests, JUnit XML output, and a cleaner reporting format.
+
+```bash
+cargo install cargo-nextest
+cargo nextest run
+cargo nextest run --retries 3 --test-threads 16
+cargo nextest run --profile ci --junit-path target/nextest-results.xml
+```
+
+`cargo nextest` does **not** run doctests — run those separately with `cargo test --doc`.
+
+### Snapshot Testing with `insta`
+
+**For output assertions longer than a few lines**, snapshot testing is cleaner than hand-written `assert_eq!`.
+
+```rust
+use insta::assert_yaml_snapshot;
+
+#[test]
+fn renders_report() {
+    let report = Report::new().with_item("alpha").with_item("beta");
+    assert_yaml_snapshot!(report);
+}
+```
+
+Workflow:
+
+```bash
+cargo install cargo-insta
+cargo test                  # snapshots that don't match write a .new file
+cargo insta review          # interactive: accept or reject each
+```
+
+Commit `.snap` files to git. Reject any snapshot diff you don't understand — that's what makes the tool useful.
+
 ## Test Best Practices
 
 ### Test Public API, Not Internals
@@ -318,9 +399,13 @@ assert_eq!(result.len(), 3, "expected 3 items, got {}", result.len());
 - **DO** put integration tests in `tests/` directory
 - **DO** write doc tests for all public API examples
 - **DO** use builders for test fixtures
+- **DO** use `LazyLock` for shared expensive fixtures — never `lazy_static!`
 - **DO** test `Send + Sync` bounds at compile time
 - **DO** use `proptest` for property-based testing
 - **DO** use seeded RNG for reproducible tests
+- **DO** run tests with `cargo nextest` for better parallelism and reporting
+- **DO** use `insta` for snapshot tests of large expected outputs
+- **DO** use `#[expect(lint, reason = "…")]` instead of `#[allow(lint)]` in test code
 - **DON'T** test internal implementation details
 - **DON'T** use non-deterministic values without seeds
 
@@ -334,5 +419,8 @@ assert_eq!(result.len(), 3, "expected 3 items, got {}", result.len());
 ## References
 
 - [Rust Book: Testing](https://doc.rust-lang.org/book/ch11-00-testing.html)
+- [cargo-nextest](https://nexte.st/) - Modern test runner
+- [insta crate](https://insta.rs/) - Snapshot testing
 - [proptest crate](https://docs.rs/proptest/)
 - [rstest crate](https://docs.rs/rstest/)
+- [`#[expect(lint)]` — Rust 1.81 notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html)

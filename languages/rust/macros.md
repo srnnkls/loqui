@@ -255,6 +255,49 @@ fn my_derive_impl(input: &DeriveInput) -> Result<proc_macro2::TokenStream, Error
 
 `Error::new_spanned` attaches the error to specific tokens, so IDEs highlight the exact problem location.
 
+### Prefer `cfg_select!` Over `cfg-if` (Rust 1.95+)
+
+**`cfg_select!` is a stdlib macro that selects the first matching configuration arm.** It replaces the popular `cfg-if` crate.
+
+```rust
+// ✘ OBSOLETE: cfg-if crate dependency
+use cfg_if::cfg_if;
+cfg_if! {
+    if #[cfg(unix)] {
+        fn platform_fn() { /* unix */ }
+    } else if #[cfg(windows)] {
+        fn platform_fn() { /* windows */ }
+    } else {
+        fn platform_fn() { /* fallback */ }
+    }
+}
+
+// ✓ CURRENT: stdlib cfg_select! (Rust 1.95+)
+cfg_select! {
+    unix    => { fn platform_fn() { /* unix */ } }
+    windows => { fn platform_fn() { /* windows */ } }
+    _       => { fn platform_fn() { /* fallback */ } }
+}
+```
+
+Drop the `cfg-if` dependency when you bump MSRV to 1.95+.
+
+### `gen` is Reserved (2024 Edition)
+
+**Don't name macros, functions, modules, or identifiers `gen`** — the 2024 edition reserves it for future generator syntax (`gen { … }` blocks, `gen fn`).
+
+```rust
+// ✘ Breaks in 2024-edition crates
+macro_rules! gen { … }
+
+// ✓ Rename or escape
+macro_rules! generate { … }
+// or:
+macro_rules! r#gen { … }   // raw identifier escape
+```
+
+See [edition.md](edition.md) for other 2024-edition reservations.
+
 ### Procedural Macros: Minimize Dependencies
 
 **Keep proc-macro crates lean.**
@@ -301,7 +344,9 @@ fn ui() {
 - **DO** test in both module and function scope
 - **DO** provide clear error messages with `compile_error!`
 - **DO** minimize proc-macro dependencies
+- **DO** prefer stdlib `cfg_select!` (1.95+) over the `cfg-if` crate
 - **DON'T** create macros with surprising or ad-hoc syntax
+- **DON'T** name macros or idents `gen` in 2024-edition crates
 
 ---
 
@@ -309,9 +354,11 @@ fn ui() {
 
 - [modules.md](modules.md) - Macro visibility and exports
 - [quality.md](quality.md) - Macro documentation
+- [edition.md](edition.md) - 2024-edition reserved keywords including `gen`
 
 ## References
 
 - [Rust API Guidelines: Macros](https://rust-lang.github.io/api-guidelines/macros.html)
 - [The Little Book of Rust Macros](https://veykril.github.io/tlborm/)
 - [Procedural Macros Workshop](https://github.com/dtolnay/proc-macro-workshop)
+- [`cfg_select!` — Rust 1.95 notes](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0.html)

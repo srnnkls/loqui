@@ -1,6 +1,14 @@
+---
+paths: "**/*.rs, **/Cargo.toml"
+---
+
 # Rust Style Guide
 
-Language-specific patterns, anti-patterns, and best practices for writing Rust code.
+Language-specific patterns, anti-patterns, and best practices for writing modern Rust (target: 1.95+, 2024 edition).
+
+**Start here:** [modernization.md](modernization.md) — run `cargo fix --edition` + `cargo clippy --fix` after every code-gen session. AI agents systematically produce pre-2024-edition idioms; the fixers handle most of it in seconds.
+
+**If you're migrating a pre-2024 codebase:** [edition.md](edition.md) has the full 2024-edition migration playbook.
 
 ---
 
@@ -8,16 +16,18 @@ Language-specific patterns, anti-patterns, and best practices for writing Rust c
 
 | Resource | When to Use |
 |----------|-------------|
-| [ownership.md](ownership.md) | Borrowing, lifetimes, ownership transfer |
-| [types.md](types.md) | Newtypes, builders, discriminated unions |
-| [errors.md](errors.md) | Result types, error propagation, panics |
-| [traits.md](traits.md) | Trait design, composition, generics vs trait objects |
-| [modules.md](modules.md) | Crate structure, visibility, public APIs |
-| [quality.md](quality.md) | Naming, documentation, anti-patterns |
-| [async-io.md](async-io.md) | Async/await, tokio, timeouts, concurrency |
-| [test.md](test.md) | Testing patterns and practices |
-| [unsafe.md](unsafe.md) | Unsafe code guidelines, safety invariants |
-| [macros.md](macros.md) | Declarative and procedural macros |
+| [modernization.md](modernization.md) | `cargo fix`, AI-drift guidance, 1.80–1.95 feature tour, stdlib-first migration |
+| [edition.md](edition.md) | Rust 2024 edition migration (RPIT capture, `unsafe extern`, `gen` reservation) |
+| [ownership.md](ownership.md) | Borrowing, lifetimes, ownership transfer, RPIT capture |
+| [types.md](types.md) | Newtypes, builders, `LazyLock`/`OnceLock`, collection helpers |
+| [errors.md](errors.md) | `Result` types, error propagation, panics, `thiserror` vs `anyhow` |
+| [traits.md](traits.md) | Trait design, native async in traits, upcasting, GATs |
+| [modules.md](modules.md) | Crate structure, workspace inheritance, workspace lints, MSRV |
+| [quality.md](quality.md) | Naming, let chains, `#[expect(lint)]`, documentation |
+| [async-io.md](async-io.md) | Async closures, Axum 0.8, actor pattern, tokio |
+| [test.md](test.md) | `cargo nextest`, `insta`, property-based, async tests |
+| [unsafe.md](unsafe.md) | `unsafe_op_in_unsafe_fn`, `unsafe extern`, safety invariants |
+| [macros.md](macros.md) | `cfg_select!`, declarative and procedural macros |
 
 ---
 
@@ -72,6 +82,11 @@ Immutable data is easier to reason about and thread-safe by default.
 **Organize crates by domain, not technical layer.**
 
 Keep related types, traits, and functions together. Dependencies flow toward the domain core.
+
+### 11. Modern Rust
+**Target the current edition. Prefer stdlib over community crates where they overlap.**
+
+Run `cargo fix --edition` after every toolchain bump and every significant AI-generated change. Drop `lazy_static` / `once_cell` / `cfg-if` / `fs2` — stdlib now covers them. Use native `async fn` in traits (not `#[async_trait]`) unless you need `dyn`. See [modernization.md](modernization.md).
 
 ---
 
@@ -135,11 +150,24 @@ Flag these when writing or reviewing Rust code:
 - ✘ Blocking in async context (use `spawn_blocking`)
 - ✘ Missing timeouts on async I/O
 - ✘ Raw `spawn` without structured concurrency
+- ✘ `#[async_trait]` when native `async fn` in traits suffices (only needed for `dyn`)
 
 **Style:**
 - ✘ `#[deny(warnings)]` in library code (breaks downstream on new lints)
+- ✘ `#[allow(lint)]` where `#[expect(lint, reason = "…")]` would catch stale suppressions
 - ✘ Unused `pub` items (use `pub(crate)` for internal)
 - ✘ Complex unsafe blocks (isolate in small modules)
+- ✘ Nested `if let` pyramids when let chains (1.88+, 2024 edition) would work
+
+**Modernization:**
+- ✘ `lazy_static!` / `once_cell::sync::Lazy` (use `std::sync::LazyLock`)
+- ✘ `once_cell::sync::OnceCell` (use `std::sync::OnceLock`)
+- ✘ `cfg_if::cfg_if!` (use stdlib `cfg_select!` on 1.95+)
+- ✘ `fs2` for file locking (use `File::lock` on 1.89+)
+- ✘ `Captures<'a>` RPIT workaround (2024 edition auto-captures; use `+ use<>` to opt out)
+- ✘ `extern "C" { … }` without `unsafe` prefix in 2024-edition code
+- ✘ `unsafe fn` bodies that perform unsafe ops without an inner `unsafe {}` block
+- ✘ Shipping without running `cargo fix --edition` + `cargo clippy --fix`
 
 ---
 
@@ -166,7 +194,7 @@ pub struct Point { x: i32, y: i32 }
 
 ## Related
 
-- [ownership.md](ownership.md), [types.md](types.md), [errors.md](errors.md), etc.
+- [modernization.md](modernization.md), [edition.md](edition.md), [ownership.md](ownership.md), [types.md](types.md), [errors.md](errors.md), [traits.md](traits.md), [async-io.md](async-io.md), [modules.md](modules.md), [quality.md](quality.md), [test.md](test.md), [unsafe.md](unsafe.md), [macros.md](macros.md)
 - **code-review**: Review methodology
 - **code-test**: Test-driven development workflow
 
@@ -176,7 +204,11 @@ pub struct Point { x: i32, y: i32 }
 
 - [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/) - Official API design guidance
 - [Rust Style Guide](https://doc.rust-lang.org/stable/style-guide/) - Official style guide
-- [The Rust Book](https://doc.rust-lang.org/book/) - Language reference
+- [The Rust Book](https://doc.rust-lang.org/book/) - Language reference, updated for 2024 edition
+- [Rust 2024 Edition Guide](https://doc.rust-lang.org/edition-guide/rust-2024/) - Migration reference
 - [Rust by Example](https://doc.rust-lang.org/rust-by-example/) - Learn through examples
 - [The Rustonomicon](https://doc.rust-lang.org/nomicon/) - Unsafe Rust guide
 - [Rust Design Patterns](https://rust-unofficial.github.io/patterns/) - Community patterns
+- [Rust release blog](https://blog.rust-lang.org/) - Every release announcement
+- [releases.rs](https://releases.rs/) - Searchable API stabilization timeline
+- [`cargo fix` docs](https://doc.rust-lang.org/cargo/commands/cargo-fix.html) - Modernizer command

@@ -106,8 +106,10 @@ fn sum_range(slice: &[u8], start: usize, end: usize) -> u8 {
 /// The caller must ensure that `bytes` contains valid UTF-8.
 /// Passing invalid UTF-8 is undefined behavior.
 pub unsafe fn from_utf8_unchecked(bytes: Vec<u8>) -> String {
-    // SAFETY: Caller guarantees bytes are valid UTF-8
-    String::from_utf8_unchecked(bytes)
+    // 2024 edition: unsafe_op_in_unsafe_fn warns by default.
+    // Wrap the unsafe call in an inner unsafe block with its own SAFETY comment.
+    // SAFETY: caller guarantees bytes are valid UTF-8 (propagated to the inner call).
+    unsafe { String::from_utf8_unchecked(bytes) }
 }
 
 impl MyVec<T> {
@@ -132,8 +134,8 @@ impl MyVec<T> {
 ```rust
 pub unsafe fn get_unchecked(slice: &[u8], index: usize) -> u8 {
     debug_assert!(index < slice.len(), "index out of bounds");
-    // SAFETY: Caller guarantees index is in bounds
-    *slice.get_unchecked(index)
+    // SAFETY: caller guarantees index is in bounds
+    unsafe { *slice.get_unchecked(index) }
 }
 
 impl<T> MyVec<T> {
@@ -143,6 +145,10 @@ impl<T> MyVec<T> {
             std::mem::size_of::<T>() == 0 || new_len <= isize::MAX as usize,
             "capacity overflow"
         );
+        // This method assigns to a field — no unsafe op is actually performed.
+        // The `unsafe fn` marker exists because the caller must uphold the invariant
+        // that the first `new_len` elements are initialized. Document that in SAFETY:
+        // on callers, not inside.
         self.len = new_len;
     }
 }
@@ -215,15 +221,15 @@ unsafe {
 **Use safe abstractions when available.**
 
 ```rust
-// ✓ CORRECT: Use MaybeUninit for uninitialized memory
+// ✓ CORRECT: Use MaybeUninit for uninitialized memory (stable API)
 use std::mem::MaybeUninit;
 
-let mut array: [MaybeUninit<i32>; 10] = MaybeUninit::uninit_array();
+let mut array: [MaybeUninit<i32>; 10] = [const { MaybeUninit::uninit() }; 10];
 for (i, elem) in array.iter_mut().enumerate() {
     elem.write(i as i32);
 }
-// SAFETY: All elements have been initialized
-let array = unsafe { MaybeUninit::array_assume_init(array) };
+// SAFETY: all 10 elements written above
+let array: [i32; 10] = array.map(|e| unsafe { e.assume_init() });
 
 // ✘ WRONG: Uninitialized memory via transmute
 let array: [i32; 10] = unsafe { std::mem::uninitialized() };  // UB!
@@ -238,6 +244,59 @@ let data = vec![1, 2, 3];
 let ptr = &data as *const _ as *mut Vec<i32>;
 unsafe { (*ptr).push(4); }  // UB!
 ```
+
+### 2024 Edition Changes
+
+The 2024 edition tightens unsafe semantics in three places. `cargo fix --edition` handles most of the mechanical rewrite; the SAFETY comments are on you.
+
+**1. Extern blocks must be marked `unsafe`.** The author of the block is asserting the signatures match foreign definitions — a classic UB trap that 2021 left implicit.
+
+```rust
+// ✘ Rust 2021
+extern "C" {
+    fn puts(s: *const c_char) -> c_int;
+}
+
+// ✓ Rust 2024
+unsafe extern "C" {
+    fn puts(s: *const c_char) -> c_int;
+}
+```
+
+**2. Unsafe attributes require the `unsafe(…)` wrapper.**
+
+```rust
+// ✓ Rust 2024
+#[unsafe(no_mangle)]
+pub extern "C" fn my_export() {}
+
+#[unsafe(export_name = "custom_name")]
+pub extern "C" fn renamed() {}
+
+#[unsafe(link_name = "libfoo_bar")]
+unsafe extern "C" {
+    fn bar();
+}
+```
+
+**3. `unsafe_op_in_unsafe_fn` is warn-by-default.** Unsafe operations inside an `unsafe fn` must be wrapped in an explicit inner `unsafe {}` block, with its own `// SAFETY:` comment.
+
+```rust
+// ✘ Invisible unsafe surface area
+unsafe fn dangerous(p: *const u8) -> u8 {
+    *p
+}
+
+// ✓ Explicit inner block — exactly where the unsafe op happens
+unsafe fn dangerous(p: *const u8) -> u8 {
+    // SAFETY: caller guarantees p is valid and properly aligned
+    unsafe { *p }
+}
+```
+
+**Why this matters:** inside a pre-2024 `unsafe fn`, every line was implicitly unsafe. You could dereference a raw pointer on line 37 of a 200-line function and nothing signaled "here be dragons." The 2024 change forces the unsafe surface to be visible — and auditable — even inside functions whose signature is already unsafe.
+
+See [edition.md](edition.md) for the full 2024 migration.
 
 ### Unsafe Traits
 
@@ -270,10 +329,12 @@ When reviewing unsafe code:
 
 1. **Is the unsafe actually necessary?** Can it be done safely?
 2. **Is the unsafe block minimal?** Only the required operations?
-3. **Are all safety invariants documented?** `// SAFETY:` comments?
-4. **Are preconditions checked?** `debug_assert!` for invariants?
-5. **Is the safe wrapper sound?** Can safe code cause UB?
-6. **Are edge cases handled?** Zero-size types, overflow, alignment?
+3. **Is the edition 2024 or later?** `unsafe extern` / `#[unsafe(no_mangle)]` / inner-block style should all be in effect.
+4. **Is there an explicit inner `unsafe {}` inside every `unsafe fn`** that actually performs unsafe operations?
+5. **Are all safety invariants documented?** `// SAFETY:` comments on every unsafe block?
+6. **Are preconditions checked?** `debug_assert!` for invariants?
+7. **Is the safe wrapper sound?** Can safe code cause UB?
+8. **Are edge cases handled?** Zero-size types, overflow, alignment?
 
 ## Summary
 
@@ -282,14 +343,20 @@ When reviewing unsafe code:
 - **DO** know the UB pitfalls: null/dangling pointers, unaligned access, data races, invalid values, aliasing violations
 - **DO** provide safe abstractions over unsafe internals
 - **DO** add `// SAFETY:` comments to every unsafe block
+- **DO** wrap unsafe ops inside `unsafe fn` bodies in explicit inner `unsafe {}` blocks (2024 edition warns by default)
+- **DO** mark all `extern` blocks as `unsafe extern`
+- **DO** use `#[unsafe(no_mangle)]` / `#[unsafe(link_name)]` / `#[unsafe(export_name)]`
 - **DO** use `debug_assert!` to check invariants
 - **DO** contain unsafe in small, auditable modules
 - **DO** prefer safe alternatives (`MaybeUninit`, `Cell`, etc.)
+- **DO** prefer safe `#[target_feature]` (1.86+) over `unsafe fn` for CPU-feature dispatch
 
 ---
 
 ## Related
 
+- [edition.md](edition.md) - 2024 edition unsafe changes in detail
+- [modernization.md](modernization.md) - Safe `#[target_feature]` (1.86+)
 - [ownership.md](ownership.md) - Safe ownership patterns
 - [modules.md](modules.md) - Containing unsafe in modules
 - [errors.md](errors.md) - Documenting `# Safety` sections
@@ -299,3 +366,6 @@ When reviewing unsafe code:
 - [The Rustonomicon](https://doc.rust-lang.org/nomicon/)
 - [Rust Reference: Undefined Behavior](https://doc.rust-lang.org/reference/behavior-considered-undefined.html)
 - [Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/)
+- [RFC 2585 — Unsafe block in unsafe fn](https://rust-lang.github.io/rfcs/2585-unsafe-block-in-unsafe-fn.html)
+- [Unsafe attributes (2024 edition)](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-attributes.html)
+- [`unsafe extern` blocks (2024 edition)](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-extern.html)

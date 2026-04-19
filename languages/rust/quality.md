@@ -172,24 +172,108 @@ impl From<InternalError> for PublicError {
 pub(crate) fn internal_helper() { /* ... */ }
 ```
 
+## Control Flow Features (2024 Edition)
+
+### Let Chains (Rust 1.88+, 2024 edition)
+
+**Chain multiple `let` bindings and boolean conditions in a single `if` or `while`.** Eliminates the pyramid of doom from older nested `if let` patterns.
+
+```rust
+// ✘ OBSOLETE: nested if let
+if let Some(user) = session.user() {
+    if let Role::Admin { scopes } = user.role() {
+        if scopes.contains(&Scope::Write) {
+            perform_admin_action();
+        }
+    }
+}
+
+// ✓ CURRENT: let chain (2024 edition)
+if let Some(user) = session.user()
+    && let Role::Admin { scopes } = user.role()
+    && scopes.contains(&Scope::Write)
+{
+    perform_admin_action();
+}
+
+// Also in while:
+while let Some(line) = reader.next_line()
+    && !line.starts_with('#')
+{
+    process(line);
+}
+```
+
+Available only in the 2024 edition. See [edition.md](edition.md) to migrate.
+
+### `if let` Guards in Match Arms (Rust 1.95+)
+
+**Pattern-match within a match guard.** Previously you had to nest an `if let` inside the arm body.
+
+```rust
+match event {
+    Event::Request(req) if let Ok(body) = parse_body(&req) => {
+        handle(&req, body);
+    }
+    Event::Request(_) => {
+        respond_bad_request();
+    }
+    _ => {}
+}
+```
+
 ## Clippy
 
 ### Enable Pedantic Lints
 
+Prefer the `[workspace.lints]` table at the workspace root. Per-crate `[lints.clippy]` is fine for single-crate repos.
+
 ```toml
-# Cargo.toml
+# Cargo.toml at workspace root (Rust 1.74+)
+[workspace.lints.clippy]
+pedantic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+# Each member:
+[lints]
+workspace = true
+```
+
+For a single-crate project:
+
+```toml
 [lints.clippy]
 pedantic = "warn"
-nursery = "warn"
 
-# Or in clippy.toml for more control
+# Enable specific nursery lints by name — not the whole group:
+cognitive_complexity = "warn"
+option_if_let_else = "warn"
 ```
+
+**Nursery lints are unstable** — enable them individually rather than blanket-enabling the whole group.
+
+### `#[expect(lint)]` Over `#[allow(lint)]` (Rust 1.81+)
+
+**`#[expect]` warns when the lint stops firing**, so stale allows don't rot silently.
 
 ```rust
-// Or at crate level
-#![warn(clippy::pedantic)]
-#![warn(clippy::nursery)]
+// ✘ STALE-PRONE: silently stays forever, even if the lint stops triggering
+#[allow(clippy::cast_possible_truncation)]
+let n = clamped as u32;
+
+// ✓ CURRENT: #[expect] — warns when the lint no longer fires
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "clamp guarantees 0..=u32::MAX"
+)]
+let n = clamped as u32;
 ```
+
+Prefer `#[expect]` for every narrow lint suppression. Use `#[allow]` only for genuinely indefinite suppressions (rare).
 
 ### Never Use `#[deny(warnings)]` in Libraries
 
@@ -226,6 +310,30 @@ impl Display for MyError {
 ```
 
 This allows error chaining: `"failed to connect: connection refused"`.
+
+## Tooling Habits
+
+### Run `cargo fix --edition` and `cargo clippy --fix`
+
+**After every significant AI-generated change or toolchain bump:**
+
+```bash
+cargo fix --edition          # structural edition migration
+cargo clippy --fix           # idiomatic modernization
+cargo test --all-targets     # verify
+git diff                     # review
+```
+
+Both commands are behavior-preserving. Run them from a clean git tree so the diff is reviewable. See [modernization.md](modernization.md) for the full workflow and [edition.md](edition.md) for edition-specific migration.
+
+### `cargo info` (Rust 1.82+)
+
+Inspect crate metadata without leaving the terminal:
+
+```bash
+cargo info serde
+# version, description, license, features, downloads
+```
 
 ## Iterators vs Loops
 
@@ -292,8 +400,11 @@ errors.iter().for_each(log::error);
 - **DO** omit `get_` prefix on simple getters
 - **DO** provide rustdoc examples for all public items
 - **DO** document errors, panics, and safety requirements
-- **DO** enable clippy pedantic lints
+- **DO** enable clippy pedantic lints via `[workspace.lints]` where possible
+- **DO** use `#[expect(lint, reason = "…")]` instead of `#[allow(lint)]`
+- **DO** reach for let chains (1.88+, 2024) instead of nested `if let` pyramids
 - **DO** use iterators for transformations, loops for side effects
+- **DO** run `cargo fix --edition` + `cargo clippy --fix` after every code-gen session
 - **DON'T** use `#[deny(warnings)]` in library code
 - **DON'T** expose internal types in documentation
 - **DON'T** use `for_each` for side effects (use `for` loop)
@@ -311,3 +422,6 @@ errors.iter().for_each(log::error);
 - [Rust API Guidelines: Naming](https://rust-lang.github.io/api-guidelines/naming.html)
 - [Rust API Guidelines: Documentation](https://rust-lang.github.io/api-guidelines/documentation.html)
 - [RFC 430: Naming Conventions](https://github.com/rust-lang/rfcs/blob/master/text/0430-finalizing-naming-conventions.md)
+- [Let chains — Rust 1.88 notes](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0.html)
+- [`#[expect(lint)]` — Rust 1.81 notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html)
+- [Workspace lints — Cargo Book](https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section)

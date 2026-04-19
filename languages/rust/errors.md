@@ -345,7 +345,17 @@ impl Ascii {
 
 The `_unchecked` variant should still use `debug_assert!` to catch errors in development.
 
-### Use `thiserror` for Library Errors, `anyhow` for Applications
+### `thiserror` vs `anyhow` — Choose by Caller Intent
+
+**The decision is not "library vs application" — it's what the caller will do with the error.**
+
+| Will callers… | Use | Why |
+|---|---|---|
+| `match` on error variants? | `thiserror` | Give them a typed enum they can pattern-match on |
+| just log or propagate? | `anyhow` | An opaque type with `.context()` is enough; save the boilerplate |
+| both (domain + infra)? | `thiserror` for domain errors; `anyhow` at entry points | Domain code yields typed errors; binaries/tests swallow with `?` |
+
+Most libraries want `thiserror` because their callers genuinely need to distinguish cases. Most binaries want `anyhow` at entry points because nobody matches on `main()`'s return. The split is by **who reads the error**, not by Cargo target type.
 
 **Choose error handling approach based on context.**
 
@@ -384,6 +394,19 @@ fn main() -> Result<()> {
 - **Libraries**: Use `thiserror` - structured errors, callers match on variants
 - **Applications**: Use `anyhow` with `.context()` - `?` is acceptable here because context is preserved
 
+**`thiserror` 2.0 (mid-2024):** slimmer dependency tree, supports disjoint `From` impls, better `#[from]` diagnostics. Upgrade across the board.
+
+### Suppress Misleading Trait-Impl Suggestions with `#[diagnostic::do_not_recommend]` (Rust 1.85+)
+
+When a blanket trait impl causes the compiler to suggest implementing an unrelated trait, `#[diagnostic::do_not_recommend]` hides it from diagnostics.
+
+```rust
+#[diagnostic::do_not_recommend]
+impl<T: InternalOnly> MyPublicTrait for T { … }
+```
+
+Particularly useful on library error types with complex `From` chains, where naive suggestions can send users down wrong paths.
+
 ## Summary
 
 **Bugs vs Errors:**
@@ -420,8 +443,10 @@ fn main() -> Result<()> {
 
 - [Error Handling in Rust (BurnSushi)](https://burntsushi.net/rust-error-handling/) - Comprehensive guide by ripgrep author
 - [Unwrap and Expect (BurnSushi)](https://burntsushi.net/unwrap/) - When panicking is appropriate
+- [thiserror vs anyhow (Luca Palmieri)](https://www.lpalmieri.com/posts/error-handling-rust/) - Caller-intent framing
 - [Rust API Guidelines: Error Types](https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err)
 - [Rust API Guidelines: Dependability](https://rust-lang.github.io/api-guidelines/dependability.html)
 - [thiserror crate](https://docs.rs/thiserror/)
 - [anyhow crate](https://docs.rs/anyhow/)
+- [`#[diagnostic::do_not_recommend]` — Rust 1.85 notes](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
 - [Error Handling in Rust](https://doc.rust-lang.org/book/ch09-00-error-handling.html)

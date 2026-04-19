@@ -205,28 +205,153 @@ fn process_explicit<'a>(data: &'a str) -> impl Future<Output = &'a str> + 'a {
 
 ### Async Trait Methods
 
-**Use `async_trait` or return `impl Future` (Rust 1.75+).**
+**Default to native `async fn` in traits (stable since Rust 1.75).** Only reach for `#[async_trait]` when you need `dyn Trait`.
 
 ```rust
-// Rust 1.75+: Native async in traits (with limitations)
+// ✓ CORRECT: native async fn in traits — no macros, no boxed futures
 trait AsyncReader {
     async fn read(&mut self) -> Result<Vec<u8>, Error>;
 }
 
-// Or with async_trait crate (more flexible)
+// Use when concrete types are known at compile time (static dispatch).
+async fn consume<R: AsyncReader>(mut r: R) -> Result<(), Error> {
+    let bytes = r.read().await?;
+    // ...
+    Ok(())
+}
+
+// ✓ Keep #[async_trait] only when you need dyn dispatch
 use async_trait::async_trait;
 
 #[async_trait]
-trait AsyncService {
+trait DynService: Send + Sync {
     async fn call(&self, request: Request) -> Response;
 }
 
-#[async_trait]
-impl AsyncService for MyService {
-    async fn call(&self, request: Request) -> Response {
-        // implementation
+fn register(svc: Box<dyn DynService>) { /* ... */ }
+```
+
+**Why the split:** native `async fn` returns an anonymous `impl Future`, which doesn't fit in a `dyn Trait` vtable. `#[async_trait]` works around this by boxing the future — with allocation overhead. For static dispatch (the common case), native is strictly better. For dynamic dispatch, you still need `#[async_trait]` or `trait-variant`.
+
+See [traits.md](traits.md) for the full discussion.
+
+### Async Closures (Rust 1.85+)
+
+**`async ‖ { … }` creates an async closure that can capture environment references across `.await` points.** A regular closure that returns an `async { … }` block can't.
+
+```rust
+// ✓ CORRECT: higher-order async function taking an async closure
+async fn retry<F, T>(f: F) -> T
+where
+    F: AsyncFn() -> T,
+{
+    loop {
+        if let Ok(v) = std::panic::AssertUnwindSafe(f()).await {
+            return v;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
+
+// Call with an async closure — captures `state` by reference across awaits
+let state = load_state();
+retry(async || fetch_with(&state).await).await;
+```
+
+The three new trait flavors:
+
+- `AsyncFnOnce` — consumes captured state on first call
+- `AsyncFnMut` — mutates captured state between calls
+- `AsyncFn` — borrows captured state immutably
+
+Prefer async closures over `Fn() -> impl Future` boilerplate when you need to capture references across awaits.
+
+### Axum 0.8 Handler Style (January 2025)
+
+**Axum 0.8 dropped the `#[async_trait]` requirement from handlers and extractors** thanks to native `async fn` in traits. Handlers are now just `async fn`s that take extractors and return an `IntoResponse`.
+
+```rust
+use axum::{routing::get, Router, extract::State, Json};
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct AppState {
+    db: Arc<dyn Database + Send + Sync>,
+}
+
+async fn get_user(State(state): State<AppState>) -> Json<User> {
+    Json(state.db.fetch(1).await)
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/user", get(get_user))
+        .with_state(AppState { db: Arc::new(Pg::new()) });
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+```
+
+Migration from 0.7 is mostly mechanical: drop `#[async_trait]` annotations from custom extractors and `FromRequestParts` impls; the compiler flags the rest.
+
+### Actor Pattern with Tokio Channels
+
+**For shared mutable state in async code, prefer an actor (owned-state + channel) over a `Mutex` on hot paths.** The actor holds the state exclusively; callers send commands; no lock contention.
+
+```rust
+use tokio::sync::{mpsc, oneshot};
+
+enum Cmd {
+    Inc,
+    Get(oneshot::Sender<u64>),
+}
+
+async fn counter_actor(mut rx: mpsc::Receiver<Cmd>) {
+    let mut count = 0u64;
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            Cmd::Inc => count += 1,
+            Cmd::Get(tx) => { let _ = tx.send(count); }
+        }
+    }
+}
+
+// Callers hold only the Sender — no shared data, no lock.
+#[derive(Clone)]
+struct CounterHandle {
+    tx: mpsc::Sender<Cmd>,
+}
+
+impl CounterHandle {
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::channel(64);
+        tokio::spawn(counter_actor(rx));
+        Self { tx }
+    }
+    pub async fn inc(&self) { let _ = self.tx.send(Cmd::Inc).await; }
+    pub async fn get(&self) -> u64 {
+        let (tx, rx) = oneshot::channel();
+        let _ = self.tx.send(Cmd::Get(tx)).await;
+        rx.await.unwrap_or(0)
+    }
+}
+```
+
+**When to use actor vs `tokio::sync::Mutex`:** use actor when operations are naturally sequential (counter, state machine, coordinated writes). Use `RwLock`/`Mutex` when operations are genuinely concurrent-read (cache lookups, configuration).
+
+### OS Pipes with `std::io::pipe` (Rust 1.87+)
+
+Stdlib `std::io::pipe()` replaces ad-hoc pipe crates:
+
+```rust
+let (mut reader, mut writer) = std::io::pipe()?;
+std::thread::spawn(move || {
+    let _ = writer.write_all(b"hello");
+});
+let mut buf = String::new();
+reader.read_to_string(&mut buf)?;
 ```
 
 ### Channel Patterns
@@ -280,7 +405,11 @@ async fn pub_sub() {
 - **DO** use `JoinSet` for structured concurrency
 - **DO** document cancellation safety
 - **DO** prefer `async fn` over manual futures
+- **DO** use native `async fn` in traits (1.75+); keep `#[async_trait]` only for `dyn`
+- **DO** use async closures (`async ‖ {}`, 1.85+) when you need to capture references across awaits
+- **DO** prefer the actor pattern over `Mutex` for sequential shared state
 - **DON'T** use raw `spawn` without tracking tasks
+- **DON'T** carry `#[async_trait]` forward in 2024-edition code unless you need `dyn`
 
 ---
 
@@ -294,3 +423,7 @@ async fn pub_sub() {
 - [Tokio Tutorial](https://tokio.rs/tokio/tutorial)
 - [Async Book](https://rust-lang.github.io/async-book/)
 - [Tokio Select](https://tokio.rs/tokio/tutorial/select)
+- [Async closures — Rust 1.85 release notes](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
+- [Announcing Axum 0.8](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0) - No more `#[async_trait]` for handlers
+- [Actors with Tokio](https://ryhl.io/blog/actors-with-tokio/) - Canonical actor pattern write-up
+- [trait-variant crate](https://docs.rs/trait-variant/) - Native + `dyn` bridging

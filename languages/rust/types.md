@@ -311,6 +311,97 @@ fn send_notification_bad(to: &str, message: &str) -> Result<(), Error> {
 
 Parse at system boundaries (API handlers, CLI, config loading). Propagate validated types internally.
 
+### Static and Thread-Local Initialization (Rust 1.80+)
+
+**Stdlib `LazyLock` / `OnceLock` / `LazyCell` replaced `lazy_static` and `once_cell`.** Drop those crates from new code.
+
+```rust
+// ✓ CORRECT: stdlib LazyLock for lazy, thread-safe statics (Rust 1.80+)
+use std::sync::LazyLock;
+
+static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load().unwrap());
+
+fn handler() {
+    let cfg = &*CONFIG;   // lazily initialized on first access
+    // ...
+}
+
+// ✓ CORRECT: OnceLock for write-once, read-many values (Rust 1.70+)
+use std::sync::OnceLock;
+
+static LOGGER: OnceLock<Logger> = OnceLock::new();
+
+pub fn init_logger(l: Logger) {
+    LOGGER.set(l).ok();   // returns Err if already set
+}
+
+// ✓ CORRECT: LazyCell for single-threaded / thread-local init
+use std::cell::LazyCell;
+
+thread_local! {
+    static CACHE: LazyCell<HashMap<String, u32>> = LazyCell::new(HashMap::new);
+}
+
+// ✘ OBSOLETE: replace with LazyLock
+// use lazy_static::lazy_static;
+// lazy_static! { static ref CONFIG: Config = Config::load(); }
+
+// ✘ OBSOLETE: replace with LazyLock / OnceLock
+// use once_cell::sync::Lazy;
+// static CONFIG: Lazy<Config> = Lazy::new(Config::load);
+```
+
+| Variant | Thread-safe | Init | Use for |
+|---|---|---|---|
+| `LazyLock<T>` | yes | closure, on first access | Lazy thread-safe globals |
+| `OnceLock<T>` | yes | explicit `.set(…)` | Write-once configuration |
+| `LazyCell<T>` | no | closure, on first access | `thread_local!` caches |
+| `OnceCell<T>` | no | explicit `.set(…)` | Single-threaded lazy init |
+
+### Const Generic Argument Inference (Rust 1.89+)
+
+**Use `<_>` for const generic arguments the compiler can infer** — symmetric with type inference.
+
+```rust
+fn identity<const N: usize>(arr: [i32; N]) -> [i32; N] { arr }
+
+// ✓ Rust 1.89+: compiler infers N
+let r = identity::<_>([1, 2, 3]);
+
+// ✘ Pre-1.89: had to spell it out
+let r = identity::<3>([1, 2, 3]);
+```
+
+### Collection Helpers
+
+Several recent stdlib additions replace manual iteration:
+
+```rust
+// Vec::pop_if (Rust 1.86+): conditional pop
+let mut v = vec![1, 2, 3, 4];
+let popped = v.pop_if(|&x| x > 3);
+// popped = Some(4), v = [1, 2, 3]
+
+// Vec::extract_if (Rust 1.87+): drain-by-predicate, returns iterator
+let mut v = vec![1, 2, 3, 4, 5];
+let evens: Vec<i32> = v.extract_if(.., |x| *x % 2 == 0).collect();
+// v = [1, 3, 5], evens = [2, 4]
+
+// HashMap::extract_if (Rust 1.87+): same pattern on maps
+let mut m: HashMap<&str, i32> = [("a", 1), ("b", 2)].into();
+let drained: Vec<_> = m.extract_if(|_, v| *v == 1).collect();
+
+// Result::flatten (Rust 1.89+)
+let nested: Result<Result<i32, &str>, &str> = Ok(Ok(42));
+assert_eq!(nested.flatten(), Ok(42));
+
+// slice::array_windows::<N>() (Rust 1.94+): overlapping const-size windows
+let data = [1u8, 2, 3, 4, 5];
+for w in data.array_windows::<3>() {
+    let _: &[u8; 3] = w;   // typed as [T; N], not &[T]
+}
+```
+
 ### Make Illegal States Unrepresentable
 
 **Use enums to eliminate invalid state combinations.**
@@ -354,6 +445,9 @@ If a combination of values is invalid, make it unrepresentable in the type syste
 - **DO** derive common traits (`Debug`, `Clone`, `PartialEq`, etc.)
 - **DO** use `bitflags` for combinable flags
 - **DO** parse at boundaries, use validated types internally
+- **DO** use stdlib `LazyLock` / `OnceLock` / `LazyCell` — never `lazy_static` / `once_cell` in new code
+- **DO** use `<_>` for const generic inference (1.89+)
+- **DO** prefer `Vec::pop_if` / `extract_if` / `array_windows::<N>()` over manual loops
 
 ---
 
@@ -362,6 +456,7 @@ If a combination of values is invalid, make it unrepresentable in the type syste
 - [ownership.md](ownership.md) - How types express ownership semantics
 - [traits.md](traits.md) - Implementing and deriving traits
 - [errors.md](errors.md) - Error types for parsing failures
+- [modernization.md](modernization.md) - Stdlib replacements for `lazy_static` / `once_cell`
 
 ## References
 
@@ -369,3 +464,5 @@ If a combination of values is invalid, make it unrepresentable in the type syste
 - [Rust Design Patterns: Newtype](https://rust-unofficial.github.io/patterns/patterns/behavioural/newtype.html)
 - [Rust Design Patterns: Builder](https://rust-unofficial.github.io/patterns/patterns/creational/builder.html)
 - [Parse, don't validate (Haskell, concepts apply)](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/)
+- [`std::sync::LazyLock`](https://doc.rust-lang.org/std/sync/struct.LazyLock.html) - Rust 1.80+
+- [`std::sync::OnceLock`](https://doc.rust-lang.org/std/sync/struct.OnceLock.html) - Rust 1.70+

@@ -261,6 +261,86 @@ pub struct Config {
 
 Feature naming: use the dependency name directly, not `use-serde` or `with-serde`.
 
+### Workspace Inheritance (Rust 1.64+)
+
+**Centralize `version`, `edition`, `license`, `rust-version`, and dependencies at the workspace root** — members inherit with `.workspace = true`.
+
+```toml
+# Cargo.toml at workspace root
+[workspace]
+members = ["core", "api", "cli"]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+authors = ["Your Name"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+thiserror = "2"
+
+# Member Cargo.toml
+[package]
+name = "core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+```
+
+One place to bump versions. One place to set `edition = "2024"`. No drift.
+
+### Workspace Lints (Rust 1.74+)
+
+**Declare lints once at the workspace root; members opt in with `lints.workspace = true`.**
+
+```toml
+# Cargo.toml at workspace root
+[workspace.lints.clippy]
+pedantic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+# Member Cargo.toml
+[lints]
+workspace = true
+```
+
+Prefer this over per-crate `#![warn(…)]` attributes — it's declarative, enforced by Cargo, and versioned with your repo.
+
+### MSRV Declaration and Resolver (Rust 1.84+)
+
+**Declare `rust-version` to get MSRV-aware dependency resolution.** Cargo 1.84+ prefers dependency versions whose own MSRV is compatible with yours, avoiding surprise breakage from a transitive dep bump.
+
+```toml
+[package]
+rust-version = "1.85"
+```
+
+Pair with `cargo msrv verify` (from the `cargo-msrv` crate) in CI if you want to enforce the declaration against actual source compatibility.
+
+### Edition Field
+
+**Set `edition = "2024"` on every new crate.** For existing crates, run `cargo fix --edition` and flip the field — see [edition.md](edition.md) for the full playbook.
+
+```toml
+[package]
+edition = "2024"
+```
+
+Mixed-edition workspaces are fully supported — migrate crate-by-crate. Declare the new default at the workspace root so new members pick up 2024 automatically.
+
 ### Module File Patterns
 
 **Avoid unnecessary nesting. Both `foo.rs` and `foo/mod.rs` are valid.**
@@ -299,9 +379,14 @@ The goal is avoiding unnecessary depth, not enforcing a specific style. Pick one
 - **DO** use `#[non_exhaustive]` for public enums/structs that may grow
 - **DO** use sealed traits when you must control implementations
 - **DO** prefer small, focused crates in workspaces
+- **DO** use `[workspace.package]` + `.workspace = true` to centralize version/edition/license/MSRV
+- **DO** use `[workspace.lints]` + `lints.workspace = true` to centralize lint policy
+- **DO** declare `rust-version` — the MSRV-aware resolver (1.84+) prevents transitive breakage
+- **DO** set `edition = "2024"` on all new crates
 - **DO** contain unsafe in minimal modules with safe wrappers
 - **DO** use Cargo features for optional functionality
 - **DON'T** create deeply nested module hierarchies
+- **DON'T** duplicate lint configuration across workspace members
 
 ---
 
@@ -316,3 +401,6 @@ The goal is avoiding unnecessary depth, not enforcing a specific style. Pick one
 - [Rust API Guidelines: Documentation](https://rust-lang.github.io/api-guidelines/documentation.html)
 - [Rust Design Patterns: Small Crates](https://rust-unofficial.github.io/patterns/patterns/structural/small-crates.html)
 - [Cargo Book: Features](https://doc.rust-lang.org/cargo/reference/features.html)
+- [Cargo Book: Workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html) - Inheritance syntax
+- [Cargo Book: Lints configuration](https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section) - `[lints]` and `[workspace.lints]`
+- [MSRV-aware resolver RFC](https://rust-lang.github.io/rfcs/3537-msrv-resolver.html)
