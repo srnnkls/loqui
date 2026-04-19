@@ -225,10 +225,10 @@ return errors.New("No pending review found.")
 
 ### Multi-Error Handling
 
-**When collecting multiple errors, use a multi-error type or return first error.**
+**When collecting multiple errors, use `errors.Join` (Go 1.20+). Never reach for `hashicorp/go-multierror` — stdlib replaced it.**
 
 ```go
-// ✓ Simple case: return first error
+// ✓ Simple case: return first error (fail-fast)
 func ValidateFields(user *User) error {
     if user.Email == "" {
         return errors.New("email required")
@@ -239,21 +239,32 @@ func ValidateFields(user *User) error {
     return nil
 }
 
-// ✓ Collect all errors (use package like hashicorp/go-multierror)
-import "github.com/hashicorp/go-multierror"
-
+// ✓ Collect all errors with errors.Join (Go 1.20+)
 func ValidateAllFields(user *User) error {
-    var result error
+    var errs []error
 
     if user.Email == "" {
-        result = multierror.Append(result, errors.New("email required"))
+        errs = append(errs, errors.New("email required"))
     }
     if user.Age < 18 {
-        result = multierror.Append(result, errors.New("must be 18 or older"))
+        errs = append(errs, errors.New("must be 18 or older"))
     }
 
-    return result
+    return errors.Join(errs...)  // returns nil if errs is empty
 }
+
+// errors.Is and errors.As walk the Join tree automatically:
+err := ValidateAllFields(user)
+if errors.Is(err, ErrEmailRequired) {
+    // matches even when joined with other errors
+}
+```
+
+**Multi-wrap with `fmt.Errorf`** (Go 1.20+): `%w` can appear multiple times in a single format string.
+
+```go
+// ✓ Wrap two causes in one error
+return fmt.Errorf("upload failed: %w; cleanup failed: %w", uploadErr, cleanupErr)
 ```
 
 ### Don't Ignore Errors in Defer
@@ -292,6 +303,8 @@ defer file.Close()  // Error ignored
 - **DO** create custom error types when errors need structured data
 - **DO** use `errors.Is` to check sentinel errors
 - **DO** use `errors.As` to extract error types
+- **DO** use `errors.Join` (Go 1.20+) for multi-error collection — never `hashicorp/go-multierror`
+- **DO** use multiple `%w` verbs in `fmt.Errorf` when wrapping more than one cause
 - **DO** start error messages lowercase, no punctuation
 - **DO** handle errors from deferred Close() calls
 - **DON'T** ignore errors (no `_ = foo()`)
@@ -312,4 +325,7 @@ defer file.Close()  // Error ignored
 
 - [Error Handling in Go](https://go.dev/blog/error-handling-and-go)
 - [Working with Errors in Go 1.13](https://go.dev/blog/go1.13-errors)
+- [Go 1.20 release notes — errors.Join](https://go.dev/doc/go1.20#errors) - multi-error stdlib
+- [errors.Join documentation](https://pkg.go.dev/errors#Join)
+- [fmt.Errorf — multiple %w verbs](https://pkg.go.dev/fmt#Errorf)
 - [Don't just check errors, handle them gracefully](https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully)

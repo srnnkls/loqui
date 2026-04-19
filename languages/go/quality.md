@@ -158,10 +158,90 @@ func ProcessData(data []byte) (result []byte, err error) {
 
 ---
 
+### Stdlib First
+
+**Before reaching for a third-party package or writing a helper, check stdlib.** The 1.21–1.26 window moved a lot of common patterns into the standard library.
+
+```go
+// ✓ CORRECT: stdlib covers it
+import (
+    "cmp"
+    "log/slog"
+    "slices"
+    "maps"
+)
+
+sorted := slices.Clone(xs)
+slices.Sort(sorted)
+
+best := cmp.Or(req.Preferred, user.Default, "fallback")
+n := max(a, b, c)
+
+keys := slices.Collect(maps.Keys(users))
+
+slog.Info("request", "method", r.Method, "path", r.URL.Path)
+
+// ✘ WRONG: hand-rolled when stdlib exists
+func sortInts(xs []int) []int {
+    out := make([]int, len(xs))
+    copy(out, xs)
+    sort.Ints(out)
+    return out
+}
+// Use slices.Clone + slices.Sort.
+```
+
+See [modernization.md](modernization.md) for the full migration table.
+
+### Loop Variable Scoping (Go 1.22+)
+
+**Delete `x := x` shadow copies inside `range` loops — they're obsolete.** Go 1.22 made each iteration a new scope, eliminating the old closure-capture footgun.
+
+```go
+// ✓ Go 1.22+: safe out of the box
+for _, x := range xs {
+    go process(x)
+}
+
+// ✘ Obsolete — `go fix` will remove this
+for _, x := range xs {
+    x := x
+    go process(x)
+}
+```
+
+### Generics Instead of `any` by Default
+
+**`any` (a.k.a. `interface{}`) discards type information. Prefer generics.**
+
+```go
+// ✘ WRONG: any at boundaries — caller must type-assert
+func First(xs []any) any { ... }
+
+// ✓ CORRECT: generic — type flows through
+func First[T any](xs []T) (T, bool) { ... }
+```
+
+`any` remains correct for JSON decoding of unknown shapes, reflection, and heterogeneous containers. Don't use it as a default for "I don't want to think about the type." See [generics.md](generics.md).
+
+### Always Run `go fix` Before Committing
+
+`go fix ./...` applies the stdlib's built-in modernizers — it's safe, behavior-preserving, and catches the drift AI agents introduce.
+
+```bash
+go fix ./...     # apply modernizers
+go vet ./...     # static checks
+gofmt -w .       # or `goimports -w .`
+```
+
+Add it to your commit hook or editor-on-save.
+
+---
+
 ## Anti-Patterns Checklist
 
 - ✘ Behavioral inheritance (Go doesn't have it, keep it that way)
-- ✘ Interface{} deep in application (use generics or concrete types)
+- ✘ `any` / `interface{}` deep in application (use generics — see [generics.md](generics.md))
 - ✘ Global mutable state
 - ✘ Goroutine leaks (always ensure cleanup)
 - ✘ Missing context.Context for cancellation
@@ -173,7 +253,9 @@ func ProcessData(data []byte) (result []byte, err error) {
 - ✘ Panic in library code (return errors)
 - ✘ Comments that restate code
 - ✘ Section divider comments (`// ====`)
-- ✘ Empty interfaces for "anything" (interface{} / any)
+- ✘ Shadow-copy `x := x` inside `range` loops (obsolete in Go 1.22+)
+- ✘ `hashicorp/go-multierror` (use `errors.Join` — Go 1.20+)
+- ✘ Hand-rolled loggers (use `log/slog` — Go 1.21+)
 
 ---
 
@@ -260,6 +342,9 @@ defer file.Close()
 - **DO** use consistent receiver names (1-2 letters)
 - **DO** check all errors immediately
 - **DO** use context.Context for cancellation
+- **DO** prefer stdlib (`slices`, `maps`, `slog`, `cmp`, `errors.Join`) over third-party
+- **DO** prefer generics over `any` for uniform behavior
+- **DO** run `go fix ./...` before committing to apply modernizers
 - **DON'T** write comments that restate code
 - **DON'T** use section dividers (`// ====`) - split into files
 - **DON'T** write godoc that restates signatures
@@ -273,6 +358,8 @@ defer file.Close()
 ## Related Files
 
 - **composition.md**: Structs vs interfaces, when to use methods
+- **generics.md**: When to prefer generics over `any`
+- **modernization.md**: Stdlib migration table, 1.21–1.26 features
 - **modules.md**: Package organization, internal vs public APIs
 - **errors.md**: Error handling patterns, wrapping, sentinel errors
 
@@ -281,3 +368,6 @@ defer file.Close()
 - [Effective Go](https://go.dev/doc/effective_go) - Official Go style guide
 - [Go Code Review Comments](https://go.dev/wiki/CodeReviewComments) - Common review feedback
 - [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md) - Comprehensive style guide
+- [Go 1.22 release notes — loop-variable change](https://go.dev/doc/go1.22#language)
+- [log/slog blog post](https://go.dev/blog/slog) - Structured logging rationale
+- [go fix documentation](https://pkg.go.dev/cmd/go#hdr-Update_packages_to_use_modern_features) - Modernizers

@@ -10,6 +10,8 @@ Package structure, organization, and public API design.
 
 ### Standard Go Project Layout
 
+**Note:** There is no Go-team-endorsed layout. The widely-cited `golang-standards/project-layout` is community-maintained and the Go team has explicitly stated it is **not** an official standard. Treat it as one reasonable option, not canonical. For small projects, a flat layout (code at the module root) is idiomatic.
+
 **For applications (cmd + internal):**
 
 ```
@@ -265,6 +267,64 @@ func main() {
 - Call into internal packages
 - Handle top-level errors
 
+### Tool Dependencies (Go 1.24+)
+
+**Use `go.mod` tool directives, not `tools.go` blank imports.**
+
+Before Go 1.24, tracking dev tools (linters, codegen) required a `tools.go` file with blank imports and a build tag. Go 1.24 replaced that with first-class `tool` directives in `go.mod`.
+
+```
+// ✓ CORRECT: Go 1.24+ go.mod
+module github.com/user/myapp
+
+go 1.26
+
+tool (
+    golang.org/x/tools/cmd/stringer
+    github.com/golangci/golangci-lint/cmd/golangci-lint
+)
+
+require (
+    // ...
+)
+```
+
+Run tools with `go tool stringer ...` — no separate `go install` step needed, version is pinned by the module.
+
+```go
+// ✘ WRONG: legacy tools.go pattern (pre-1.24)
+//go:build tools
+
+package main
+
+import (
+    _ "golang.org/x/tools/cmd/stringer"
+)
+```
+
+Delete `tools.go` when you upgrade — `go fix` can migrate for you.
+
+### Workspaces (go.work)
+
+**Use `go.work` for multi-module development, not `replace` directives.**
+
+When working across multiple modules locally (e.g., a library and its consumer), a workspace file lets you develop without editing each module's `go.mod`.
+
+```
+// ✓ go.work at repo root
+go 1.26
+
+use (
+    ./server
+    ./shared
+    ./cli
+)
+```
+
+- `go.work` is typically gitignored; don't commit it (it describes local development layout, not module structure).
+- Use `go work sync` to propagate require versions.
+- For a single-module repo, don't bother — workspaces are only useful when editing 2+ modules together.
+
 ### Avoid Utils/Common Packages
 
 **"Utils" and "common" are code smells. Use specific names.**
@@ -306,7 +366,10 @@ internal/github/
 - **DO** use `internal/` to enforce privacy
 - **DO** ensure dependencies flow toward domain core
 - **DO** keep main.go thin (orchestration only)
+- **DO** use `go.mod` tool directives (Go 1.24+) instead of `tools.go` blank imports
+- **DO** use `go.work` for multi-module local development (not `replace` directives)
 - **DON'T** use "utils" or "common" packages
+- **DON'T** treat `golang-standards/project-layout` as canonical — it isn't Go-team-endorsed
 - **DON'T** organize by technical layer (models/, services/)
 - **DON'T** split prematurely (< 100 lines per file)
 - **NEVER** create circular dependencies
@@ -321,6 +384,9 @@ internal/github/
 
 ## References
 
-- [Standard Go Project Layout](https://github.com/golang-standards/project-layout)
-- [Go Package Best Practices](https://go.dev/blog/package-names)
+- [Go Package Best Practices](https://go.dev/blog/package-names) - Official
 - [Internal Packages](https://go.dev/doc/go1.4#internalpackages)
+- [Go Modules Reference](https://go.dev/ref/mod)
+- [Go 1.24 release notes — tool directives](https://go.dev/doc/go1.24#tools) - replaces tools.go
+- [Workspaces tutorial](https://go.dev/doc/tutorial/workspaces) - go.work for multi-module dev
+- [golang-standards/project-layout](https://github.com/golang-standards/project-layout) - Community repo, not Go-team-endorsed (see its own disclaimer)

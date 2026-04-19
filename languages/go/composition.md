@@ -202,6 +202,71 @@ func (pr PRRef) String() string {
 
 **CRITICAL: Be consistent within a type. Don't mix pointer and value receivers.**
 
+### Generics as an Alternative to Interfaces
+
+**Interfaces are for runtime polymorphism. Generics are for compile-time parametricity. Pick the right tool.**
+
+When behavior is uniform across types — the function body treats `T` as an opaque value, never inspects it — prefer generics over an interface.
+
+```go
+// ✘ Interface indirection where a generic would read cleaner
+type Summable interface{ Add(Summable) Summable }
+
+// ✓ Generic — no interface to implement, full type safety
+func Sum[T cmp.Ordered](xs []T) T {
+    var total T
+    for _, x := range xs {
+        total += x
+    }
+    return total
+}
+```
+
+**Keep interfaces when** the set of implementers is open, when dispatch needs to happen at runtime (value, not type), or when the abstraction hides substantial behavior differences.
+
+See [generics.md](generics.md) for the full treatment.
+
+### Iterator Pattern (Go 1.23+)
+
+**`iter.Seq[T]` and `iter.Seq2[K, V]` let functions produce sequences without materializing a slice.** Use them when:
+- The collection might be large
+- The caller may short-circuit (break out early)
+- The sequence is naturally lazy (streams, paginated APIs, file lines)
+
+```go
+// ✓ CORRECT: iterator — caller controls consumption
+func Lines(r io.Reader) iter.Seq[string] {
+    return func(yield func(string) bool) {
+        s := bufio.NewScanner(r)
+        for s.Scan() {
+            if !yield(s.Text()) {
+                return   // caller broke out
+            }
+        }
+    }
+}
+
+for line := range Lines(file) {
+    if strings.HasPrefix(line, "#") {
+        continue
+    }
+    process(line)
+}
+
+// ✓ iter.Seq2 for key/value pairs
+func Entries[K comparable, V any](m map[K]V) iter.Seq2[K, V] {
+    return func(yield func(K, V) bool) {
+        for k, v := range m {
+            if !yield(k, v) {
+                return
+            }
+        }
+    }
+}
+```
+
+**When to prefer returning `[]T` instead:** when the caller almost always wants the whole thing, when the collection is already in memory, or when you need random access. Iterators are not a universal replacement.
+
 ### Constructor Functions
 
 **Use New* functions for initialization. Return concrete types.**
@@ -223,6 +288,18 @@ func NewClientWithCache(token string, cache Cache) (*Client, error) { ... }
 
 // ✘ WRONG: Returning interface hides implementation
 func NewClient(token string) (ClientInterface, error) { ... }
+```
+
+**Go 1.26: `new(expr)`.** The built-in `new` now accepts an expression, not just a type. This retires the `ptr[T]` helper pattern that proliferated in pre-1.26 codebases.
+
+```go
+// ✓ Go 1.26+: inline pointer-to-literal
+timeout := new(30 * time.Second)   // *time.Duration
+pending := new("pending")          // *string
+
+// ✘ Delete this helper — `go fix` can migrate for you
+func ptr[T any](v T) *T { return &v }
+p := ptr(42)
 ```
 
 ### Embedding: Use Sparingly
@@ -279,6 +356,9 @@ type User struct {
 - **DO** use New* constructor functions returning concrete types
 - **DO** use embedding sparingly (interfaces yes, structs rarely)
 - **DO** design types around behavior, not data hierarchy
+- **DO** reach for generics (not `any`, not an interface) when behavior is uniform over types
+- **DO** return `iter.Seq[T]` / `iter.Seq2[K,V]` (1.23+) for lazy/streaming sequences
+- **DO** use `new(expr)` (1.26+) instead of `ptr[T]` helpers
 - **DON'T** create empty structs as namespaces (use packages)
 - **DON'T** create fat interfaces (split into smaller ones)
 - **DON'T** mix pointer and value receivers on same type
@@ -288,12 +368,16 @@ type User struct {
 
 ## Related Files
 
+- **generics.md**: Type parameters, constraints, when to choose generics over interfaces
 - **quality.md**: When methods belong on type vs extracted to functions
 - **modules.md**: Organizing functions into cohesive packages
 - **errors.md**: Error handling patterns, error types
+- **modernization.md**: `new(expr)`, iterators, modernization guidance
 
 ## References
 
 - [Effective Go - Methods](https://go.dev/doc/effective_go#methods)
 - [Go Proverbs](https://go-proverbs.github.io/) - "The bigger the interface, the weaker the abstraction"
 - [Accept Interfaces, Return Structs](https://bryanftan.medium.com/accept-interfaces-return-structs-in-go-d4cab29a301b)
+- [Range-over-func](https://go.dev/blog/range-functions) - Iterator pattern (Go 1.23)
+- [When to use generics](https://go.dev/blog/when-generics) - Generics vs interfaces
