@@ -16,6 +16,26 @@ branch = "main"
 repo = "mre/idiomatic-rust"
 branch = "master"
 
+[sources.emacs-lisp-style-guide]
+repo = "bbatsov/emacs-lisp-style-guide"
+branch = "master"
+
+[sources.emacs-lisp-elements]
+repo = "protesilaos/emacs-lisp-elements"
+branch = "main"
+
+[sources.emacs-package-dev-handbook]
+repo = "alphapapa/emacs-package-dev-handbook"
+branch = "master"
+
+[sources.awesome-elisp]
+repo = "emacs-tw/awesome-elisp"
+branch = "master"
+
+[sources.emacs-lisp-manual-tips]
+url = "https://git.savannah.gnu.org/cgit/emacs.git/plain/doc/lispref/tips.texi?h=emacs-31.1"
+digest = "sha256:9cd1fc1181beed81d24cba4f4fbd6b27e9c05f21dcf8702d79b28ebb58ea0df6"
+
 [targets.python-resources]
 path = "resources/languages/python"
 layout = "by-source"
@@ -31,3 +51,14 @@ layout = "by-source"
 api-guidelines = { history = true }
 patterns = { history = true }
 idiomatic-rust = { history = true }
+
+[targets.elisp-resources]
+path = "resources/languages/elisp"
+layout = "by-source"
+
+[targets.elisp-resources.sources]
+emacs-lisp-style-guide = { history = true }
+emacs-lisp-elements = { history = true }
+emacs-package-dev-handbook = { history = true }
+awesome-elisp = { history = true }
+emacs-lisp-manual-tips = {}
