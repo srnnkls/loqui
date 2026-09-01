@@ -15,6 +15,16 @@ The root gives us *eloquence*, *colloquial*, *loquacious*, and *soliloquy*.
 
 Modern language guidelines for the age of AI. Opinionated style guides that help both humans and AI assistants write better code.
 
+## Resources
+
+Reference sources under `resources/` are declared in `phora.toml`, pinned by `phora.lock`, and deployed with their Git history:
+
+```sh
+phora sync
+```
+
+Advance every source with `phora update`, or one source with `phora update <source>`.
+
 ## Languages
 
 - *[Python](languages/python/)* — Types first, composition over inheritance, feature-based organization

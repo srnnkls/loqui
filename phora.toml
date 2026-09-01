@@ -1,0 +1,33 @@
+version = 1
+
+[sources.python-testing-with-pytest]
+repo = "jashburn8020/python-testing-with-pytest"
+branch = "master"
+
+[sources.api-guidelines]
+repo = "rust-lang/api-guidelines"
+branch = "master"
+
+[sources.patterns]
+repo = "rust-unofficial/patterns"
+branch = "main"
+
+[sources.idiomatic-rust]
+repo = "mre/idiomatic-rust"
+branch = "master"
+
+[targets.python-resources]
+path = "resources/languages/python"
+layout = "by-source"
+
+[targets.python-resources.sources]
+python-testing-with-pytest = { history = true }
+
+[targets.rust-resources]
+path = "resources/languages/rust"
+layout = "by-source"
+
+[targets.rust-resources.sources]
+api-guidelines = { history = true }
+patterns = { history = true }
+idiomatic-rust = { history = true }

@@ -1,0 +1,33 @@
+version = 1
+
+[[sources]]
+name = "idiomatic-rust"
+git = "https://github.com/mre/idiomatic-rust.git"
+resolved = "master"
+commit = "0c4ecadfd772c57f2e671b850bb82cd6dc926a49"
+digest = "blake3:8269862410e3f6ad87b40a217821b70249cc1de590a05b3575aec30ac85a0ba4"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "patterns"
+git = "https://github.com/rust-unofficial/patterns.git"
+resolved = "main"
+commit = "f279f3541c37f3cc36ac6c95ba09465c70ad5271"
+digest = "blake3:70f57db2f9ee3e21b1f81624367d744f4d9105e1cddba60ba07956af5b43425d"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "python-testing-with-pytest"
+git = "https://github.com/jashburn8020/python-testing-with-pytest.git"
+resolved = "master"
+commit = "eca162766f3eb25c79778d64f993e3162c359674"
+digest = "blake3:8071c590386db6e304d9439a84788564f74f4b48194cc1ac64120f4494360de9"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "api-guidelines"
+git = "https://github.com/rust-lang/api-guidelines.git"
+resolved = "master"
+commit = "97a0969cb07fe4cabb0eed8a56234053f47d83dc"
+digest = "blake3:ef36fba9414d64203fe8e0a196bafcd004abea83a0dc051e6d2a6ea9d1df2958"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
