@@ -1,0 +1,73 @@
+version = 1
+
+[[sources]]
+name = "emacs-lisp-manual-tips"
+git = "https://git.savannah.gnu.org/cgit/emacs.git/plain/doc/lispref/tips.texi?h=emacs-31.1"
+resolved = "url"
+commit = "deecb52bf8bf7b77cdce1b81ac7467d58e36688b"
+digest = "blake3:2b4bacf52b3210c714d937e3dcf6371214d3f4b25693a725aa243870a65fecd0"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "idiomatic-rust"
+git = "https://github.com/mre/idiomatic-rust.git"
+resolved = "master"
+commit = "0c4ecadfd772c57f2e671b850bb82cd6dc926a49"
+digest = "blake3:8269862410e3f6ad87b40a217821b70249cc1de590a05b3575aec30ac85a0ba4"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "awesome-elisp"
+git = "https://github.com/emacs-tw/awesome-elisp.git"
+resolved = "master"
+commit = "954998f76eda05153962d1b5e681c72a57c449fb"
+digest = "blake3:842d513d519c4571ced45a40eef49fd6f932d7e07b846ec49a9f7d8df19d8bc9"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "emacs-lisp-style-guide"
+git = "https://github.com/bbatsov/emacs-lisp-style-guide.git"
+resolved = "master"
+commit = "6de6c4bd6ab3570fb9f3cdf8cdde72ef6636b4d0"
+digest = "blake3:74d0cfd946700f95d1b29d0a15005280b62cfe206579897d84c15efdd173e3b2"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "patterns"
+git = "https://github.com/rust-unofficial/patterns.git"
+resolved = "main"
+commit = "f279f3541c37f3cc36ac6c95ba09465c70ad5271"
+digest = "blake3:70f57db2f9ee3e21b1f81624367d744f4d9105e1cddba60ba07956af5b43425d"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "python-testing-with-pytest"
+git = "https://github.com/jashburn8020/python-testing-with-pytest.git"
+resolved = "master"
+commit = "eca162766f3eb25c79778d64f993e3162c359674"
+digest = "blake3:8071c590386db6e304d9439a84788564f74f4b48194cc1ac64120f4494360de9"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "api-guidelines"
+git = "https://github.com/rust-lang/api-guidelines.git"
+resolved = "master"
+commit = "97a0969cb07fe4cabb0eed8a56234053f47d83dc"
+digest = "blake3:ef36fba9414d64203fe8e0a196bafcd004abea83a0dc051e6d2a6ea9d1df2958"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "emacs-package-dev-handbook"
+git = "https://github.com/alphapapa/emacs-package-dev-handbook.git"
+resolved = "master"
+commit = "c7cdf8e07fbceb4f2baa25289b1d7843c22f3d8c"
+digest = "blake3:d30143bb10cb80f1cad3d5de018092fd5b65f75b5c942d355aad9d336c625c28"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "emacs-lisp-elements"
+git = "https://github.com/protesilaos/emacs-lisp-elements.git"
+resolved = "main"
+commit = "4713485d32f4ee06eb3de7d70495e02891324ec5"
+digest = "blake3:013d48f2f0abe39ee40f5eac2826ab095b107175ff841f016f4fb4cb521858e3"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
