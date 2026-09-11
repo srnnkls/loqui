@@ -29,6 +29,7 @@ Advance every source with `phora update`, or one source with `phora update <sour
 
 - *[Python](languages/python/)* — Types first, composition over inheritance, feature-based organization
 - *[Go](languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
+- *[Zig](languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
 - *[Emacs Lisp](languages/elisp/)* — Functional core, explicit editor effects, lexical binding
 
 ## Principles
