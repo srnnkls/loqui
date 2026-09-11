@@ -17,7 +17,7 @@ Modern language guidelines for the age of AI. Opinionated style guides that help
 
 ## Resources
 
-Reference sources under `resources/` are declared in `phora.toml` and resolved by `phora.lock`. Git sources can retain history; URL sources are integrity-pinned by digest:
+[Phora](https://github.com/srnnkls/phora) manages reference sources under `resources/`, declared in `phora.toml` and resolved by `phora.lock`. Git sources can retain history; URL sources are integrity-pinned by digest:
 
 ```sh
 phora sync
@@ -29,7 +29,9 @@ Advance every source with `phora update`, or one source with `phora update <sour
 
 - *[Python](languages/python/)* — Types first, composition over inheritance, feature-based organization
 - *[Go](languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
+- *[Rust](languages/rust/)* — Ownership, domain types, explicit errors, trait-based composition
 - *[Zig](languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
+- *[Bash](languages/bash/)* — Command patterns, shell scripting, explicit error handling
 - *[Emacs Lisp](languages/elisp/)* — Functional core, explicit editor effects, lexical binding
 
 ## Principles
