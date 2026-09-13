@@ -9,6 +9,14 @@ digest = "blake3:2b4bacf52b3210c714d937e3dcf6371214d3f4b25693a725aa243870a65fecd
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
+name = "ripgrep"
+git = "https://github.com/BurntSushi/ripgrep.git"
+resolved = "master"
+commit = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
+digest = "blake3:742f2caad1599929f0b2e4d59cfecf906aa8c6c2b42e012f001f6f4bbc0b748f"
+config_digest = "blake3:770d8a6e6133e82d37b3be1b9cbfaa0e13c031634ebb4932b3d0d2c2f9c39c63"
+
+[[sources]]
 name = "idiomatic-rust"
 git = "https://github.com/mre/idiomatic-rust.git"
 resolved = "master"
@@ -33,11 +41,27 @@ digest = "blake3:74d0cfd946700f95d1b29d0a15005280b62cfe206579897d84c15efdd173e3b
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
+name = "redb"
+git = "https://github.com/cberner/redb.git"
+resolved = "master"
+commit = "8f08680d3d40f2a030a59ae815b7e763ea6c70d9"
+digest = "blake3:8e69af727d7f4216c54786a43d3c8c89c88ac789c99ad1a29992bdad10b04c43"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
 name = "patterns"
 git = "https://github.com/rust-unofficial/patterns.git"
 resolved = "main"
 commit = "f279f3541c37f3cc36ac6c95ba09465c70ad5271"
-digest = "blake3:70f57db2f9ee3e21b1f81624367d744f4d9105e1cddba60ba07956af5b43425d"
+digest = "blake3:1c66015957037dd82c4c1390e876fa99caa305bb6c3f2f1b6c822becdcb8d6d9"
+config_digest = "blake3:c3df8c4cfc72dcbfd6bd01a8aeb59cd06150db7f8dd926b37ffadd19be9bc9de"
+
+[[sources]]
+name = "rust-book"
+git = "https://github.com/rust-lang/book.git"
+resolved = "main"
+commit = "1500248d8f230566e4ec9f27fcbb8fe9e2898ab1"
+digest = "blake3:40bc399fb47815b0c92d33cc56d1073e4f5703fe35f347742162982b5e44d0f5"
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
@@ -57,6 +81,14 @@ digest = "blake3:ef36fba9414d64203fe8e0a196bafcd004abea83a0dc051e6d2a6ea9d1df295
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
+name = "tokio"
+git = "https://github.com/tokio-rs/tokio.git"
+resolved = "master"
+commit = "2025ddd83c1466b81f25d0be50f5334b620c51c3"
+digest = "blake3:efc59ad3fede1adb64488a04ebe39f1fcb2542b6292bd3bf0aadaaa22f69bf51"
+config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
 name = "emacs-package-dev-handbook"
 git = "https://github.com/alphapapa/emacs-package-dev-handbook.git"
 resolved = "master"
@@ -71,3 +103,11 @@ resolved = "main"
 commit = "4713485d32f4ee06eb3de7d70495e02891324ec5"
 digest = "blake3:013d48f2f0abe39ee40f5eac2826ab095b107175ff841f016f4fb4cb521858e3"
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
+
+[[sources]]
+name = "serde"
+git = "https://github.com/serde-rs/serde.git"
+resolved = "master"
+commit = "a874a1b1bb1cc16cf5ee3b1b7b527af5705742bb"
+digest = "blake3:93da97b35e665188b04d2f9ab8184a6e7b7102a9128792ea4b41bfa17e26ae00"
+config_digest = "blake3:775395012a8f10f73bdea302b471d9cf0dcb5a649c303193e79957d823fd90a0"
