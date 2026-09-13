@@ -4,424 +4,156 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Quality
 
-Naming conventions, documentation, and code quality guidelines.
+Use familiar names, understandable control flow, and documentation that explains observable behavior. Let rustfmt handle routine formatting; keep lint policy aligned with the project's supported toolchain and contracts.
 
-## Naming Conventions
+## Naming
 
-### RFC 430 Casing Rules
+| Item                                | Convention                     | Examples                             |
+| ----------------------------------- | ------------------------------ | ------------------------------------ |
+| Types, traits, variants             | `UpperCamelCase`               | `UserId`, `Iterator`, `Some`         |
+| Functions, methods, modules, macros | `snake_case`                   | `read_file`, `as_bytes`, `my_macro!` |
+| Constants and statics               | `SCREAMING_SNAKE_CASE`         | `MAX_SIZE`, `CONFIG`                 |
+| Type parameters                     | Short meaningful capitals      | `T`, `E`, `Reader`                   |
+| Lifetimes                           | Short or descriptive lowercase | `'a`, `'de`, `'input`                |
 
-| Item | Convention | Example |
-|------|------------|---------|
-| Types | `UpperCamelCase` | `HttpRequest`, `UserId` |
-| Traits | `UpperCamelCase` | `Iterator`, `Display` |
-| Enum variants | `UpperCamelCase` | `Some`, `None`, `Ok` |
-| Functions | `snake_case` | `read_file`, `to_string` |
-| Methods | `snake_case` | `as_bytes`, `into_inner` |
-| Macros | `snake_case!` | `println!`, `vec!` |
-| Modules | `snake_case` | `http_client`, `file_io` |
-| Constants | `SCREAMING_SNAKE_CASE` | `MAX_SIZE`, `PI` |
-| Statics | `SCREAMING_SNAKE_CASE` | `GLOBAL_CONFIG` |
-| Type parameters | single uppercase | `T`, `E`, `K`, `V` |
-| Lifetimes | short lowercase | `'a`, `'de`, `'src` |
+Treat acronyms as words: `Uuid`, `HttpRequest`. Omit `get_` from simple getters such as `name()`; indexed or fallible access can appropriately use `get()` and `get_mut()`.
 
-Acronyms count as one word: `Uuid` not `UUID`, `Stdin` not `StdIn`.
+### Conversion Prefixes
 
-### Conversion Method Prefixes
+The [API Guidelines' naming chapter](../../resources/languages/rust/api-guidelines/src/naming.md) uses these conventions:
 
-| Prefix | Cost | Ownership | Example |
-|--------|------|-----------|---------|
-| `as_` | Free | borrowed → borrowed | `str::as_bytes()` |
-| `to_` | Expensive | borrowed → owned | `str::to_lowercase()` |
-| `into_` | Variable | owned → owned | `String::into_bytes()` |
+| Prefix  | Typical meaning                                         | Examples                            |
+| ------- | ------------------------------------------------------- | ----------------------------------- |
+| `as_`   | Cheap borrowed view or reference conversion             | `str::as_bytes`, `Vec::as_slice`    |
+| `to_`   | Conversion preserving the source, potentially expensive | `str::to_lowercase`, `Path::to_str` |
+| `into_` | Consuming conversion, with variable cost                | `String::into_bytes`                |
+
+`to_` is not restricted to borrowed-to-owned conversion: `Path::to_str` returns an optional borrowed string, and a `Copy` value may be taken by value. Names describe the conversion contract, not a universal allocation rule.
 
 ```rust
-impl MyType {
-    // Free view into internal data
-    pub fn as_slice(&self) -> &[u8] {
-        &self.data
-    }
+struct Bytes(Vec<u8>);
 
-    // Expensive conversion, allocates
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.data.to_vec()
-    }
-
-    // Takes ownership, may or may not be cheap
-    pub fn into_inner(self) -> Vec<u8> {
-        self.data
-    }
+impl Bytes {
+    fn as_slice(&self) -> &[u8] { &self.0 }
+    fn to_vec(&self) -> Vec<u8> { self.0.clone() }
+    fn into_vec(self) -> Vec<u8> { self.0 }
 }
 ```
 
-### Getter Names
+Collections should support appropriate `IntoIterator` implementations and familiar `iter`/`iter_mut` methods. See [traits](traits.md#collection-traits).
 
-**No `get_` prefix for simple getters.**
+## Public Documentation
 
-```rust
-// ✓ CORRECT
-impl Config {
-    pub fn name(&self) -> &str { &self.name }
-    pub fn name_mut(&mut self) -> &mut String { &mut self.name }
-}
+Explain what the API does, its important restrictions, and a representative use. Use complete examples with imports and types; hide necessary setup with rustdoc's `#` lines when it distracts from the example. Mark intentional rejection examples `compile_fail`, and use `no_run` only when executing an otherwise compilable example would require external state.
 
-// ✘ WRONG
-impl Config {
-    pub fn get_name(&self) -> &str { &self.name }
-}
-
-// Exception: indexed access uses get
-impl Container {
-    pub fn get(&self, index: usize) -> Option<&Item> { /* ... */ }
-    pub fn get_mut(&mut self, index: usize) -> Option<&mut Item> { /* ... */ }
-}
-```
-
-### Iterator Methods
-
-Collections should provide `iter`, `iter_mut`, `into_iter`:
+Document expected errors, public panic conditions, and caller safety obligations in their relevant sections. A safe function must not depend on a hidden `# Safety` requirement; see [unsafe](unsafe.md).
 
 ```rust
-impl MyCollection {
-    pub fn iter(&self) -> Iter<'_> { /* ... */ }
-    pub fn iter_mut(&mut self) -> IterMut<'_> { /* ... */ }
-    pub fn into_iter(self) -> IntoIter { /* ... */ }
-}
-```
-
-Iterator type names match their methods: `iter()` → `Iter`, `into_iter()` → `IntoIter`.
-
-## Documentation
-
-### All Public Items Have Examples
-
-```rust
-/// Parses a configuration string into a Config object.
-///
-/// # Examples
-///
-/// ```
-/// # use mylib::Config;
-/// let config = Config::parse("key=value")?;
-/// assert_eq!(config.get("key"), Some("value"));
-/// # Ok::<(), mylib::Error>(())
-/// ```
-pub fn parse(s: &str) -> Result<Config, Error> {
-    // ...
-}
-```
-
-Examples show **why** to use something, not just **how** to call it.
-
-### Doc Examples: `?` vs `unwrap`
-
-**House style: Use `unwrap()` in doc examples unless error handling is the point.**
-
-```rust
-// ✓ PREFERRED: unwrap keeps focus on the API
-/// ```
-/// let config = Config::parse("key=value").unwrap();
-/// assert_eq!(config.get("key"), Some("value"));
-/// ```
-
-// ✓ OK: ? when showing error handling patterns
-/// ```
-/// # fn main() -> Result<(), Box<dyn Error>> {
-/// let config = Config::parse("key=value")?;
-/// #     Ok(())
-/// # }
-/// ```
-```
-
-**Rationale:** Doc examples demonstrate API usage, not error handling. Boilerplate (`# fn main()`, `# Ok(())`) obscures the example. For when `unwrap` is appropriate in production code, see [errors.md](errors.md#when-unwrapexpect-is-acceptable).
-
-### Document Errors, Panics, Safety
-
-```rust
-/// Opens a database connection.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The connection string is malformed
-/// - The database is unreachable
-/// - Authentication fails
+/// Returns the first byte.
 ///
 /// # Panics
-///
-/// Panics if called from within an async runtime.
-///
-/// # Safety
-///
-/// (For unsafe functions only)
-/// The caller must ensure the pointer is valid and properly aligned.
-pub fn connect(url: &str) -> Result<Connection, DbError> {
-    // ...
+/// Panics when `bytes` is empty.
+pub fn first_byte(bytes: &[u8]) -> u8 {
+    *bytes.first().expect("bytes must be nonempty")
 }
 ```
 
-### Hide Implementation Details
+A documented panic contract can be valid. If empty input is an expected caller case, an `Option<u8>` API may serve them better. `unwrap` is reasonable in a short usage example with known valid data; show `?` when propagation is part of the lesson. See [errors](errors.md#when-unwrapexpect-is-acceptable).
+
+`#[doc(hidden)]` hides an item from documentation, not from the type system or downstream access. Use visibility to control the public surface.
+
+## Control Flow
+
+Use let chains for related conditions that read naturally together. They require Rust 1.88 and edition 2024:
 
 ```rust
-// Don't expose internal types in docs
-#[doc(hidden)]
-impl From<InternalError> for PublicError {
-    fn from(err: InternalError) -> Self { /* ... */ }
-}
-
-// Use pub(crate) for internal APIs
-pub(crate) fn internal_helper() { /* ... */ }
-```
-
-## Control Flow Features (2024 Edition)
-
-### Let Chains (Rust 1.88+, 2024 edition)
-
-**Chain multiple `let` bindings and boolean conditions in a single `if` or `while`.** Eliminates the pyramid of doom from older nested `if let` patterns.
-
-```rust
-// ✘ OBSOLETE: nested if let
-if let Some(user) = session.user() {
-    if let Role::Admin { scopes } = user.role() {
-        if scopes.contains(&Scope::Write) {
-            perform_admin_action();
-        }
-    }
-}
-
-// ✓ CURRENT: let chain (2024 edition)
-if let Some(user) = session.user()
-    && let Role::Admin { scopes } = user.role()
-    && scopes.contains(&Scope::Write)
+let input = Some("42");
+if let Some(text) = input
+    && let Ok(value) = text.parse::<u32>()
+    && value > 0
 {
-    perform_admin_action();
-}
-
-// Also in while:
-while let Some(line) = reader.next_line()
-    && !line.starts_with('#')
-{
-    process(line);
+    assert_eq!(value, 42);
 }
 ```
 
-Available only in the 2024 edition. See [edition.md](edition.md) to migrate.
+Nested blocks remain useful when branches have separate work or different error handling. A `while let` chain stops when any condition fails; it does not skip a failed item automatically.
 
-### `if let` Guards in Match Arms (Rust 1.95+)
-
-**Pattern-match within a match guard.** Previously you had to nest an `if let` inside the arm body.
+Rust 1.95 also supports `if let` match guards:
 
 ```rust
-match event {
-    Event::Request(req) if let Ok(body) = parse_body(&req) => {
-        handle(&req, body);
+fn parse_positive(input: Option<&str>) -> Option<u32> {
+    match input {
+        Some(text) if let Ok(value) = text.parse::<u32>() && value > 0 => Some(value),
+        _ => None,
     }
-    Event::Request(_) => {
-        respond_bad_request();
-    }
-    _ => {}
 }
+assert_eq!(parse_positive(Some("42")), Some(42));
 ```
 
-## Clippy
+Choose iterator chains for straightforward transformations and loops when control flow, mutation, or early exits are clearer:
 
-### Enable Pedantic Lints
+```rust
+let numbers: [i32; 4] = [-1, 0, 2, 3];
+let squares: Vec<_> = numbers.into_iter()
+    .filter(|value| *value > 0)
+    .map(|value| value * value)
+    .collect();
+assert_eq!(squares, [4, 9]);
 
-Prefer the `[workspace.lints]` table at the workspace root. Per-crate `[lints.clippy]` is fine for single-crate repos.
+let mut total = 0;
+for value in squares {
+    total += value;
+}
+assert_eq!(total, 13);
+```
+
+Loops are valid for transformations too, and `for_each` can deliberately express effects. Prefer clarity over a categorical imperative-versus-functional rule.
+
+## Lint Policy
+
+Start with default compiler and Clippy diagnostics, then select additional lints with demonstrated value. Pedantic and nursery groups may need case-by-case exceptions; a blanket group is a project choice, not a language requirement. Give lint groups lower priority when individual overrides are needed:
 
 ```toml
-# Cargo.toml at workspace root (Rust 1.74+)
-[workspace.lints.clippy]
-pedantic = "warn"
-unwrap_used = "warn"
-expect_used = "warn"
-
+# Root Cargo.toml
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
-# Each member:
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Optional project policy:
+pedantic = { level = "warn", priority = -1 }
+```
+
+```toml
+# Member Cargo.toml
 [lints]
 workspace = true
 ```
 
-For a single-crate project:
-
-```toml
-[lints.clippy]
-pedantic = "warn"
-
-# Enable specific nursery lints by name — not the whole group:
-cognitive_complexity = "warn"
-option_if_let_else = "warn"
-```
-
-**Nursery lints are unstable** — enable them individually rather than blanket-enabling the whole group.
-
-### `#[expect(lint)]` Over `#[allow(lint)]` (Rust 1.81+)
-
-**`#[expect]` warns when the lint stops firing**, so stale allows don't rot silently.
+Use `#[expect(lint, reason = "...")]` for a specific diagnostic that should remain present. It warns when the expectation is unfulfilled, helping expose stale exceptions. `#[allow]` is suitable when the lint is intentionally inapplicable regardless of whether it fires under every build configuration:
 
 ```rust
-// ✘ STALE-PRONE: silently stays forever, even if the lint stops triggering
-#[allow(clippy::cast_possible_truncation)]
-let n = clamped as u32;
-
-// ✓ CURRENT: #[expect] — warns when the lint no longer fires
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "clamp guarantees 0..=u32::MAX"
-)]
-let n = clamped as u32;
+#[expect(dead_code, reason = "reserved internal hook during this refactor")]
+fn future_hook() {}
 ```
 
-Prefer `#[expect]` for every narrow lint suppression. Use `#[allow]` only for genuinely indefinite suppressions (rare).
+Prefer enforcing warnings in CI over embedding `#![deny(warnings)]` in a reusable library. New diagnostics can otherwise turn a source-compatible compiler upgrade into a build failure in contexts where lint capping does not apply. Cargo normally caps dependency lints; avoid claiming that every dependency consumer necessarily breaks.
 
-### Never Use `#[deny(warnings)]` in Libraries
+On Cargo 1.97+, `CARGO_BUILD_WARNINGS=deny` provides a warning policy without the cache invalidation of changing `RUSTFLAGS`. See [modernization](modernization.md#cargo-warning-policy-197).
 
-```rust
-// ✘ WRONG: Breaks downstream builds on new lints
-#![deny(warnings)]
+## Error Messages
 
-// ✓ CORRECT: Warn but don't fail
-#![warn(clippy::all)]
+Use lowercase wording without trailing punctuation when a message is designed to be chained, for example `failed to read configuration: permission denied`. Preserve paths, operations, and source errors where useful, while keeping credentials and other sensitive data out of diagnostics. Match the application's presentation style at the outermost boundary.
 
-// ✓ OK for binaries: can use deny
-// (won't affect other crates)
-#![deny(clippy::all)]  // In main.rs only
-```
+## Tooling
 
-## Error Message Style
+Use [routine validation](test.md#routine-validation) for source-preserving checks and [modernization](modernization.md#routine-checks-and-deliberate-edits) for deliberate edits. Keep edition fixes within the [edition migration procedure](edition.md).
 
-**Lowercase, no trailing punctuation.**
-
-```rust
-// ✓ CORRECT
-impl Display for MyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "connection refused")
-    }
-}
-
-// ✘ WRONG
-impl Display for MyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Connection refused.")
-    }
-}
-```
-
-This allows error chaining: `"failed to connect: connection refused"`.
-
-## Tooling Habits
-
-### Run `cargo fix --edition` and `cargo clippy --fix`
-
-**After every significant AI-generated change or toolchain bump:**
-
-```bash
-cargo fix --edition          # structural edition migration
-cargo clippy --fix           # idiomatic modernization
-cargo test --all-targets     # verify
-git diff                     # review
-```
-
-Both commands are behavior-preserving. Run them from a clean git tree so the diff is reviewable. See [modernization.md](modernization.md) for the full workflow and [edition.md](edition.md) for edition-specific migration.
-
-### `cargo info` (Rust 1.82+)
-
-Inspect crate metadata without leaving the terminal:
-
-```bash
-cargo info serde
-# version, description, license, features, downloads
-```
-
-## Iterators vs Loops
-
-**Use iterators for transformations, loops for side effects.**
-
-Rust supports both imperative and functional styles. They coexist intentionally - don't cargo-cult one over the other.
-
-```rust
-// ✓ CORRECT: Iterator for transformation (no side effects)
-let squares: Vec<_> = numbers.iter()
-    .filter(|n| **n > 0)
-    .map(|n| n * n)
-    .collect();
-
-// ✓ CORRECT: Loop for side effects
-for item in &items {
-    println!("{item}");
-    db.insert(item)?;
-}
-
-// ✘ WRONG: for_each for side effects (just a loop in disguise)
-items.iter().for_each(|item| {
-    println!("{item}");  // Side effect hidden in functional syntax
-});
-
-// ✘ WRONG: Loop for pure transformation
-let mut squares = Vec::new();
-for n in &numbers {
-    if *n > 0 {
-        squares.push(n * n);  // Iterator chain is clearer
-    }
-}
-```
-
-**The principle:** Functional pipelines should be pure transformations. If you're doing I/O, mutation, or other side effects, be honest about it - use a `for` loop.
-
-```rust
-// ✓ Iterator: data in, data out
-let result = input
-    .lines()
-    .filter(|line| !line.is_empty())
-    .map(|line| line.to_uppercase())
-    .collect::<Vec<_>>();
-
-// ✓ Loop: side effects are the point
-for line in input.lines() {
-    if !line.is_empty() {
-        file.write_all(line.as_bytes())?;  // Side effect
-    }
-}
-```
-
-**Exception:** `for_each` is acceptable when you need to consume an iterator and the closure is already a function:
-
-```rust
-// ✓ OK: for_each with existing function
-errors.iter().for_each(log::error);
-```
-
-## Summary
-
-- **DO** follow RFC 430 naming conventions
-- **DO** use `as_`/`to_`/`into_` prefixes correctly
-- **DO** omit `get_` prefix on simple getters
-- **DO** provide rustdoc examples for all public items
-- **DO** document errors, panics, and safety requirements
-- **DO** enable clippy pedantic lints via `[workspace.lints]` where possible
-- **DO** use `#[expect(lint, reason = "…")]` instead of `#[allow(lint)]`
-- **DO** reach for let chains (1.88+, 2024) instead of nested `if let` pyramids
-- **DO** use iterators for transformations, loops for side effects
-- **DO** run `cargo fix --edition` + `cargo clippy --fix` after every code-gen session
-- **DON'T** use `#[deny(warnings)]` in library code
-- **DON'T** expose internal types in documentation
-- **DON'T** use `for_each` for side effects (use `for` loop)
-
----
+Use `cargo info crate_name` for package metadata and feature information. Check current documentation for API and version claims, and use the pinned [source examples](resources.md) to understand contextual design choices.
 
 ## Related
 
-- [errors.md](errors.md) - Error type design and messages
-- [modules.md](modules.md) - Visibility and public API design
-- [traits.md](traits.md) - Trait naming conventions
-
-## References
-
-- [Rust API Guidelines: Naming](https://rust-lang.github.io/api-guidelines/naming.html)
-- [Rust API Guidelines: Documentation](https://rust-lang.github.io/api-guidelines/documentation.html)
-- [RFC 430: Naming Conventions](https://github.com/rust-lang/rfcs/blob/master/text/0430-finalizing-naming-conventions.md)
-- [Let chains — Rust 1.88 notes](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0.html)
-- [`#[expect(lint)]` — Rust 1.81 notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html)
-- [Workspace lints — Cargo Book](https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section)
+- [Errors](errors.md): recoverability, context, and panic contracts
+- [Modules](modules.md): public surface and workspace inheritance
+- [Testing](test.md): executable documentation
+- [Official Style Guide](https://doc.rust-lang.org/style-guide/)
