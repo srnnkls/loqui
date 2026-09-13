@@ -11,6 +11,7 @@ branch = "master"
 [sources.patterns]
 repo = "rust-unofficial/patterns"
 branch = "main"
+exclude = ["theme/book.js"] # Symlink alias; third_party/mdbook/book.js is included.
 
 [sources.idiomatic-rust]
 repo = "mre/idiomatic-rust"
@@ -36,29 +37,72 @@ branch = "master"
 url = "https://git.savannah.gnu.org/cgit/emacs.git/plain/doc/lispref/tips.texi?h=emacs-31.1"
 digest = "sha256:9cd1fc1181beed81d24cba4f4fbd6b27e9c05f21dcf8702d79b28ebb58ea0df6"
 
+[sources.ripgrep]
+git = "https://github.com/BurntSushi/ripgrep.git"
+branch = "master"
+exclude = ["HomebrewFormula"] # Symlink alias; pkg/brew is included.
+
+[sources.redb]
+git = "https://github.com/cberner/redb.git"
+branch = "master"
+
+[sources.tokio]
+git = "https://github.com/tokio-rs/tokio.git"
+branch = "master"
+
+[sources.serde]
+git = "https://github.com/serde-rs/serde.git"
+branch = "master"
+# Package aliases point to files and directories already included in this snapshot.
+exclude = [
+    "serde/LICENSE-APACHE",
+    "serde/LICENSE-MIT",
+    "serde/README.md",
+    "serde/crates-io.md",
+    "serde/src/core",
+    "serde_core/LICENSE-APACHE",
+    "serde_core/LICENSE-MIT",
+    "serde_derive/LICENSE-APACHE",
+    "serde_derive/LICENSE-MIT",
+    "serde_derive/README.md",
+    "serde_derive/crates-io.md",
+    "serde_derive_internals/LICENSE-APACHE",
+    "serde_derive_internals/LICENSE-MIT",
+    "serde_derive_internals/src",
+]
+
+[sources.rust-book]
+git = "https://github.com/rust-lang/book.git"
+branch = "main"
+
 [targets.python-resources]
 path = "resources/languages/python"
 layout = "by-source"
 
 [targets.python-resources.sources]
-python-testing-with-pytest = { history = true }
+python-testing-with-pytest = { template = false, collapse = false }
 
 [targets.rust-resources]
 path = "resources/languages/rust"
 layout = "by-source"
 
 [targets.rust-resources.sources]
-api-guidelines = { history = true }
-patterns = { history = true }
-idiomatic-rust = { history = true }
+api-guidelines = { template = false, collapse = false }
+patterns = { template = false, collapse = false }
+idiomatic-rust = { template = false, collapse = false }
+ripgrep = { template = false, collapse = false }
+redb = { template = false, collapse = false }
+tokio = { template = false, collapse = false }
+serde = { template = false, collapse = false }
+rust-book = { template = false, collapse = false }
 
 [targets.elisp-resources]
 path = "resources/languages/elisp"
 layout = "by-source"
 
 [targets.elisp-resources.sources]
-emacs-lisp-style-guide = { history = true }
-emacs-lisp-elements = { history = true }
-emacs-package-dev-handbook = { history = true }
-awesome-elisp = { history = true }
+emacs-lisp-style-guide = { template = false, collapse = false }
+emacs-lisp-elements = { template = false, collapse = false }
+emacs-package-dev-handbook = { template = false, collapse = false }
+awesome-elisp = { template = false, collapse = false }
 emacs-lisp-manual-tips = {}
