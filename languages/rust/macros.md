@@ -4,361 +4,143 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Macros
 
-Guidelines for declarative and procedural macros.
+Prefer functions, generics, and const evaluation when they express the operation clearly. Use macros for capabilities such as variadic input, item generation, derives, or syntax that cannot be expressed conveniently by a function.
 
-## Core Guidelines
+## Familiar Input and Predictable Expansion
 
-### Prefer Functions Over Macros
-
-**Use macros only when functions can't do the job.**
+Make macro input resemble the Rust it generates. Support trailing commas and relevant visibility and attributes where callers need them. Evaluate input expressions the documented number of times; duplicating a token can duplicate an effect.
 
 ```rust
-// ✓ CORRECT: Function when possible
-pub fn max<T: Ord>(a: T, b: T) -> T {
-    if a > b { a } else { b }
-}
-
-// ✓ CORRECT: Macro when you need:
-// - Variable arguments
-// - Code generation
-// - Compile-time string manipulation
-// - Accessing caller's scope
-
-macro_rules! vec_of_strings {
-    ($($x:expr),* $(,)?) => {
-        vec![$($x.to_string()),*]
+macro_rules! strings {
+    ($($value:expr),* $(,)?) => {
+        ::std::vec![$(($value).to_string()),*]
     };
 }
 
-// ✘ WRONG: Macro for simple operations
-macro_rules! add {
-    ($a:expr, $b:expr) => { $a + $b };  // Just use a function
-}
+let mut calls = 0;
+let values = strings![{ calls += 1; calls }, "hello",];
+assert_eq!(calls, 1);
+assert_eq!(values, ["1", "hello"]);
 ```
 
-Valid reasons for macros:
-- Variadic arguments (`println!`, `vec!`)
-- DSLs and code generation
-- Compile-time computation
-- Conditional compilation beyond `#[cfg]`
+Parenthesize expression fragments before attaching operations to preserve grouping. A small macro should not hide ownership transfer, control flow, or allocation that callers need to understand.
 
-### Input Syntax Mirrors Output
+## Hygiene and Public Helpers
 
-**Macro syntax should look like the code it generates.**
+In an exported declarative macro, use `$crate` for paths into the defining crate and qualified paths for other dependencies where appropriate. `$crate` is robust to renaming the defining dependency; it does not bypass visibility. Helpers used by an external expansion must be accessible at that call site.
 
-```rust
-// ✓ CORRECT: struct keyword signals struct generation
-bitflags! {
-    struct Permissions: u32 {
-        const READ = 0b001;
-        const WRITE = 0b010;
-    }
-}
+For example, an exported macro can refer to `$crate::__private::Vec` when the library deliberately provides a public hidden support module. `#[doc(hidden)]` hides documentation only; that helper still participates in the public expansion contract. Test the macro from a separate crate and with a renamed dependency.
 
-// ✘ WRONG: Ad-hoc syntax
-bitflags! {
-    flags Permissions: u32 {
-        READ = 0b001,
-        WRITE = 0b010,
-    }
-}
+[Serde's derive implementation](../../resources/languages/rust/serde/serde_derive/src) is a useful example of generated paths and public support requirements. Copy the principle, not an internal layout that happens to work in one crate. See the [Reference on macro hygiene](https://doc.rust-lang.org/reference/macros-by-example.html#hygiene).
 
-// ✓ CORRECT: Semicolons like regular constants
-const_group! {
-    const A: u32 = 1;
-    const B: u32 = 2;
-}
-
-// ✘ WRONG: Commas (constants use semicolons)
-const_group! {
-    const A: u32 = 1,
-    const B: u32 = 2,
-}
-```
-
-### Use `$crate` for Hygiene
-
-**Reference crate items with `$crate` to avoid name conflicts.**
+## Preserve Attributes and Visibility
 
 ```rust
-// ✓ CORRECT: $crate ensures correct resolution
-#[macro_export]
-macro_rules! my_vec {
-    ($($x:expr),* $(,)?) => {
-        {
-            let mut v = $crate::__private::Vec::new();
-            $(v.push($x);)*
-            v
-        }
-    };
-}
-
-// Re-export Vec for macro hygiene
-#[doc(hidden)]
-pub mod __private {
-    pub use std::vec::Vec;
-}
-
-// ✘ WRONG: Assumes Vec is in scope
-macro_rules! bad_vec {
-    ($($x:expr),* $(,)?) => {
-        {
-            let mut v = Vec::new();  // Breaks if user shadows Vec
-            $(v.push($x);)*
-            v
-        }
-    };
-}
-```
-
-### Support Attributes
-
-**Allow attributes on generated items.**
-
-```rust
-// ✓ CORRECT: Supports #[derive], #[cfg], etc.
 macro_rules! make_struct {
     (
-        $(#[$attr:meta])*
-        $vis:vis struct $name:ident {
+        $(#[$attribute:meta])*
+        $visibility:vis struct $name:ident {
             $(
-                $(#[$field_attr:meta])*
-                $field_vis:vis $field:ident : $ty:ty
+                $(#[$field_attribute:meta])*
+                $field_visibility:vis $field:ident: $ty:ty
             ),* $(,)?
         }
     ) => {
-        $(#[$attr])*
-        $vis struct $name {
+        $(#[$attribute])*
+        $visibility struct $name {
             $(
-                $(#[$field_attr])*
-                $field_vis $field: $ty,
+                $(#[$field_attribute])*
+                $field_visibility $field: $ty,
             )*
         }
     };
 }
 
-// Usage with attributes
 make_struct! {
     #[derive(Debug, Clone)]
     pub struct Config {
-        #[serde(default)]
+        /// Display name.
         pub name: String,
-        pub value: i32,
+        pub(crate) enabled: bool,
     }
 }
+
+let config = Config { name: "example".into(), enabled: true };
+assert!(config.enabled);
 ```
 
-### Support Visibility Specifiers
+Forward only attributes whose placement is supported. A helper attribute such as `#[serde(default)]` needs its corresponding derive or attribute macro; forwarding it onto an otherwise plain struct does not make it valid.
 
-**Follow Rust's visibility syntax.**
+Test the positions the macro promises to support: module scope, block scope, expressions, or other intended contexts. A macro need not work in every syntactic position, but its interface should make the intended use clear.
 
-```rust
-// ✓ CORRECT: Visibility is configurable
-macro_rules! make_wrapper {
-    ($vis:vis $name:ident($inner:ty)) => {
-        $vis struct $name($inner);
-    };
-}
+## Diagnostics
 
-make_wrapper!(pub UserId(u64));      // Public
-make_wrapper!(pub(crate) Internal(u64));  // Crate-visible
-make_wrapper!(Private(u64));         // Private (default)
-```
+Use `compile_error!` for invalid macro syntax that the macro itself recognizes:
 
-### Work in All Item Positions
-
-**Test macros in module scope and function scope.**
-
-```rust
-// ✓ CORRECT: Works everywhere
-macro_rules! define_id {
-    ($name:ident) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-        pub struct $name(u64);
-    };
-}
-
-// Module scope
-define_id!(UserId);
-
-fn example() {
-    // Function scope
-    define_id!(LocalId);
-    let id = LocalId(42);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_in_function() {
-        define_id!(TestId);  // Should work here too
-    }
-}
-```
-
-### Provide Good Error Messages
-
-**Use `compile_error!` for clear diagnostics.**
-
-```rust
-macro_rules! require_string {
-    (String) => { /* ok */ };
-    ($other:ty) => {
-        compile_error!(concat!(
-            "expected `String`, found `",
-            stringify!($other),
-            "`"
-        ));
-    };
-}
-
-// For complex validation
-macro_rules! validated_struct {
-    (struct $name:ident { }) => {
+```rust,compile_fail
+macro_rules! nonempty_struct {
+    (struct $name:ident {}) => {
         compile_error!("struct must have at least one field");
     };
     (struct $name:ident { $($fields:tt)+ }) => {
         struct $name { $($fields)+ }
     };
 }
+
+nonempty_struct!(struct Empty {});
 ```
 
-**For proc-macros, use `syn::Error` for spanned diagnostics:**
+Token matching is syntactic, not semantic type analysis: matching the token `String` does not establish that an arbitrary alias resolves to the standard string type. Leave type-level constraints to generated Rust bounds where possible.
+
+For procedural macros, attach errors to relevant input spans, for example through `syn::Error::new_spanned` and `to_compile_error`. Returning a deliberate diagnostic is more useful than panicking during expansion.
+
+## Editions and Conditional Compilation
+
+A macro's definition edition determines the meaning of fragment specifiers. In edition 2024, `expr` also matches top-level const blocks and underscore expressions. Use `expr_2021` to preserve earlier matching rules when required; there is no `expr_2024` fragment. Review arm precedence when migrating. See the [edition example](edition.md#macro-fragments-and-match-ergonomics).
+
+`gen` is reserved in edition 2024. Use another identifier or `r#gen`; this reservation does not make generators stable.
+
+On Rust 1.95+, `cfg_select!` selects the first matching configuration arm:
 
 ```rust
-use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput, Error};
-use quote::quote;
-
-#[proc_macro_derive(MyDerive)]
-pub fn my_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-
-    match my_derive_impl(&input) {
-        Ok(tokens) => tokens.into(),
-        Err(e) => e.to_compile_error().into(),  // Preserves span for IDE
-    }
-}
-
-fn my_derive_impl(input: &DeriveInput) -> Result<proc_macro2::TokenStream, Error> {
-    if input.generics.params.is_empty() {
-        return Err(Error::new_spanned(
-            &input.ident,
-            "MyDerive requires at least one generic parameter"
-        ));
-    }
-    Ok(quote! { /* ... */ })
-}
-```
-
-`Error::new_spanned` attaches the error to specific tokens, so IDEs highlight the exact problem location.
-
-### Prefer `cfg_select!` Over `cfg-if` (Rust 1.95+)
-
-**`cfg_select!` is a stdlib macro that selects the first matching configuration arm.** It replaces the popular `cfg-if` crate.
-
-```rust
-// ✘ OBSOLETE: cfg-if crate dependency
-use cfg_if::cfg_if;
-cfg_if! {
-    if #[cfg(unix)] {
-        fn platform_fn() { /* unix */ }
-    } else if #[cfg(windows)] {
-        fn platform_fn() { /* windows */ }
-    } else {
-        fn platform_fn() { /* fallback */ }
-    }
-}
-
-// ✓ CURRENT: stdlib cfg_select! (Rust 1.95+)
 cfg_select! {
-    unix    => { fn platform_fn() { /* unix */ } }
-    windows => { fn platform_fn() { /* windows */ } }
-    _       => { fn platform_fn() { /* fallback */ } }
+    unix => { fn platform() -> &'static str { "unix" } }
+    windows => { fn platform() -> &'static str { "windows" } }
+    _ => { fn platform() -> &'static str { "other" } }
 }
+assert!(!platform().is_empty());
 ```
 
-Drop the `cfg-if` dependency when you bump MSRV to 1.95+.
+Use ordinary `#[cfg]` for independent conditions. Remove a `cfg-if` dependency only after checking that the standard macro covers its uses and the project's supported compilers. See the [standard macro](https://doc.rust-lang.org/std/macro.cfg_select.html).
 
-### `gen` is Reserved (2024 Edition)
+## Procedural Macro Crates
 
-**Don't name macros, functions, modules, or identifiers `gen`** — the 2024 edition reserves it for future generator syntax (`gen { … }` blocks, `gen fn`).
-
-```rust
-// ✘ Breaks in 2024-edition crates
-macro_rules! gen { … }
-
-// ✓ Rename or escape
-macro_rules! generate { … }
-// or:
-macro_rules! r#gen { … }   // raw identifier escape
-```
-
-See [edition.md](edition.md) for other 2024-edition reservations.
-
-### Procedural Macros: Minimize Dependencies
-
-**Keep proc-macro crates lean.**
+Put procedural macro entry points in a `proc-macro` crate. Select dependencies and features for the syntax actually parsed:
 
 ```toml
-# proc-macro crate Cargo.toml
 [lib]
 proc-macro = true
 
 [dependencies]
-# Minimal dependencies
-syn = { version = "2", features = ["derive"] }  # Only needed features
+syn = { version = "2", default-features = false, features = ["derive", "parsing", "printing", "proc-macro"] }
 quote = "1"
 proc-macro2 = "1"
-
-# Avoid pulling in the whole ecosystem
 ```
 
-### Test Macro Expansion
+This is an example configuration for Syn 2, not a requirement to use that major version. Adding bodies or broader syntax may require additional features. Leaving default features enabled while adding a feature list does not disable the defaults. Follow the chosen version's [feature documentation](https://docs.rs/syn/2/syn/#optional-features).
 
-**Use `cargo expand` and `trybuild` for testing.**
+Keep token parsing and generation separate enough to test independently. [Serde's derive sources](../../resources/languages/rust/serde/serde_derive/src) show why generic bounds, lifetimes, attributes, and crate paths need focused handling.
 
-```rust
-// tests/expand.rs - using trybuild for compile-fail tests
-#[test]
-fn ui() {
-    let t = trybuild::TestCases::new();
-    t.pass("tests/cases/pass/*.rs");
-    t.compile_fail("tests/cases/fail/*.rs");
-}
+## Verify Generated Behavior
 
-// Manual expansion check with cargo-expand:
-// $ cargo expand --test my_test
-```
+Use `cargo expand` to inspect expansions where helpful, and compile downstream examples to check hygiene, visibility, and type bounds. Use compile-pass and compile-fail cases for public macro contracts. A tool such as `trybuild` can snapshot diagnostics when their quality is important; review changes rather than accepting new snapshots automatically.
 
-## Summary
-
-- **NEVER** use macros when functions suffice
-- **NEVER** expose internal items without `$crate`
-- **DO** make macro syntax mirror the generated code
-- **DO** use `$crate` for hygiene
-- **DO** support attributes on generated items
-- **DO** support visibility specifiers
-- **DO** test in both module and function scope
-- **DO** provide clear error messages with `compile_error!`
-- **DO** minimize proc-macro dependencies
-- **DO** prefer stdlib `cfg_select!` (1.95+) over the `cfg-if` crate
-- **DON'T** create macros with surprising or ad-hoc syntax
-- **DON'T** name macros or idents `gen` in 2024-edition crates
-
----
+Do not compare expansion text as a substitute for checking behavior: Rust's hygiene is not fully represented by printed tokens. Run relevant runtime tests for expression evaluation count, moves, generated conversions, and other observable effects.
 
 ## Related
 
-- [modules.md](modules.md) - Macro visibility and exports
-- [quality.md](quality.md) - Macro documentation
-- [edition.md](edition.md) - 2024-edition reserved keywords including `gen`
-
-## References
-
-- [Rust API Guidelines: Macros](https://rust-lang.github.io/api-guidelines/macros.html)
-- [The Little Book of Rust Macros](https://veykril.github.io/tlborm/)
-- [Procedural Macros Workshop](https://github.com/dtolnay/proc-macro-workshop)
-- [`cfg_select!` — Rust 1.95 notes](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0.html)
+- [Edition 2024](edition.md): fragments and reserved identifiers
+- [Modules](modules.md): public support surfaces and dependencies
+- [Testing](test.md): downstream and compile-failure tests
+- [API Guidelines: macros](../../resources/languages/rust/api-guidelines/src/macros.md)
+- [Source catalog](resources.md): Serde implementation examples

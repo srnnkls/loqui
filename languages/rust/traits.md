@@ -4,209 +4,221 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Traits
 
-Trait design, composition patterns, and polymorphism guidelines.
+Traits express shared behavior and the guarantees callers may rely on. Choose dispatch, ownership, lifetimes, and concurrency bounds as parts of that contract.
 
-## Core Guidelines
+## Static and Dynamic Dispatch
 
-### Traits for Shared Behavior
-
-**No inheritance in Rust. Use trait-based polymorphism.**
+Generics allow specialization and inlining, with possible costs in compilation time and code size. Trait objects support runtime selection and can reduce monomorphization, with indirect calls unless optimized away. Neither design guarantees better performance without measurement.
 
 ```rust
-// ✓ CORRECT: Trait defines shared behavior
-trait Drawable {
-    fn draw(&self, canvas: &mut Canvas);
-    fn bounds(&self) -> Rect;
+// A borrowed trait object needs no heap allocation.
+trait Measure {
+    fn size(&self) -> usize;
 }
 
-struct Circle { center: Point, radius: f64 }
-struct Rectangle { origin: Point, size: Size }
-
-impl Drawable for Circle {
-    fn draw(&self, canvas: &mut Canvas) { /* ... */ }
-    fn bounds(&self) -> Rect { /* ... */ }
+impl Measure for String {
+    fn size(&self) -> usize { self.len() }
 }
 
-impl Drawable for Rectangle {
-    fn draw(&self, canvas: &mut Canvas) { /* ... */ }
-    fn bounds(&self) -> Rect { /* ... */ }
+fn size_generic<T: Measure + ?Sized>(value: &T) -> usize {
+    value.size()
 }
 
-// ✘ NO EQUIVALENT: Inheritance-based polymorphism
-// class Shape { virtual void draw() = 0; }
-// class Circle : public Shape { ... }
+fn size_dynamic(value: &dyn Measure) -> usize {
+    value.size()
+}
+
+let text = String::from("hello");
+assert_eq!(size_generic(&text), size_dynamic(&text));
 ```
 
-### Prefer Generics Over Trait Objects
+Use dynamic dispatch for runtime choice, interface simplicity, or code-size constraints as well as heterogeneous collections. [ripgrep's directory walker](../../resources/languages/rust/ripgrep/crates/ignore/src/walk.rs) combines shared callbacks with trait objects and scoped visitor lifetimes.
 
-**Static dispatch by default. Dynamic dispatch when required.**
+## Dyn Compatibility
 
-```rust
-// ✓ PREFERRED: Generics (static dispatch, monomorphized)
-fn draw_all<D: Drawable>(items: &[D], canvas: &mut Canvas) {
-    for item in items {
-        item.draw(canvas);
-    }
-}
-
-// ✓ CORRECT: Trait object when heterogeneous collection needed
-fn draw_mixed(items: &[Box<dyn Drawable>], canvas: &mut Canvas) {
-    for item in items {
-        item.draw(canvas);
-    }
-}
-
-// Use trait objects when:
-// - Heterogeneous collections (different concrete types)
-// - Plugin systems / runtime extension
-// - Reducing code size (no monomorphization)
-```
-
-Generics: zero-cost, inlined, larger binary
-Trait objects: indirection, vtable lookup, smaller binary
-
-### Make Traits Object-Safe When Useful
-
-**Use `Self: Sized` to exclude non-object-safe methods.**
+A dyn-compatible trait can be used as `dyn Trait`; this was formerly called object safety. Exclude a method that cannot be dispatched through the object with `where Self: Sized` when the remaining interface is useful:
 
 ```rust
 trait Storage {
-    // Object-safe: can be used with dyn Storage
     fn read(&self, key: &str) -> Option<Vec<u8>>;
-    fn write(&self, key: &str, value: &[u8]);
 
-    // Not object-safe due to generic, but excluded from trait object
-    fn read_typed<T: DeserializeOwned>(&self, key: &str) -> Option<T>
+    fn read_as<T>(&self, key: &str) -> Option<T>
     where
-        Self: Sized,  // Excludes from dyn Storage
+        Self: Sized,
+        T: From<Vec<u8>>,
     {
-        self.read(key).and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        self.read(key).map(T::from)
     }
 }
 
-// Can use as trait object
-fn use_storage(storage: &dyn Storage) {
-    storage.read("key");  // Works
-    // storage.read_typed::<Config>("key");  // Won't compile
+fn inspect(storage: &dyn Storage) -> Option<Vec<u8>> {
+    storage.read("key")
 }
 ```
 
-### Use Extension Traits for External Types
+This exclusion makes `read_as` unavailable through `dyn Storage`; it does not make arbitrary generic methods dynamically dispatchable. Native async methods, opaque return types, and GATs have their own restrictions. Check the [Reference's dyn-compatibility rules](https://doc.rust-lang.org/reference/items/traits.html#dyn-compatibility).
 
-**Add methods to types you don't own via extension traits.**
+Trait-object upcasting has been stable since 1.86:
 
 ```rust
-// ✓ CORRECT: Extension trait for String
-trait StringExt {
-    fn truncate_to(&self, max_len: usize) -> &str;
-}
+trait Animal { fn speak(&self) -> &'static str; }
+trait Dog: Animal { fn fetch(&self); }
 
-impl StringExt for str {
-    fn truncate_to(&self, max_len: usize) -> &str {
-        if self.len() <= max_len {
-            self
-        } else {
-            &self[..self.floor_char_boundary(max_len)]
-        }
-    }
-}
+struct Labrador;
+impl Animal for Labrador { fn speak(&self) -> &'static str { "woof" } }
+impl Dog for Labrador { fn fetch(&self) {} }
 
-// Now available on all &str
-let s = "hello world".truncate_to(5);
+let dog: &dyn Dog = &Labrador;
+let animal: &dyn Animal = dog;
+assert_eq!(animal.speak(), "woof");
 ```
 
-Convention: name extension traits `{Type}Ext` (e.g., `IteratorExt`, `StringExt`).
+An `as_super` helper may be redundant on supported compilers, but removing a public method is still an API compatibility decision.
 
-### Implement Standard Conversion Traits
+## Async Methods: Decide the Future Contract
 
-**Use `From`/`TryFrom`, never implement `Into`/`TryInto` directly.**
+Native `async fn` and return-position `impl Trait` in traits have been stable since 1.75. They work well when their bounds fit the callers. Evaluate these separate questions before changing an existing trait:
 
-```rust
-// ✓ CORRECT: Implement From
-impl From<Config> for Settings {
-    fn from(config: Config) -> Self {
-        Settings {
-            name: config.name,
-            value: config.value,
-        }
-    }
+| Requirement                                   | Design choice                                                                       |
+| --------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Local future with no cross-thread requirement | Native `async fn` may suffice                                                       |
+| Generic caller needs a `Send` future          | State `-> impl Future<Output = T> + Send`, or generate an equivalent trait contract |
+| Runtime dispatch through `dyn Trait`          | Use a dyn-compatible boxed-future interface, manually or via `async-trait`          |
+| Borrowed result or receiver                   | Preserve the intended lifetimes; boxing does not remove them                        |
+
+A `Send + Sync` receiver does not promise that each method's future is `Send`. This fails because a generic caller cannot assume that missing guarantee:
+
+```rust,compile_fail
+trait Service: Send + Sync {
+    async fn fetch(&self) -> String;
 }
 
-// Automatically get Into for free
-let settings: Settings = config.into();
+fn require_send(_: impl Send) {}
 
-// ✓ CORRECT: TryFrom for fallible conversions
-impl TryFrom<&str> for Email {
-    type Error = EmailError;
-
-    fn try_from(s: &str) -> Result<Self, Self::Error> {
-        if s.contains('@') {
-            Ok(Email(s.to_string()))
-        } else {
-            Err(EmailError::InvalidFormat)
-        }
-    }
-}
-
-// ✘ WRONG: Don't implement Into directly
-impl Into<Settings> for Config {
-    fn into(self) -> Settings { /* ... */ }  // Use From instead
+fn check<S: Service>(service: &S) {
+    require_send(service.fetch());
 }
 ```
 
-### Never Use Deref for Inheritance
-
-**`Deref` is for smart pointers only, not for inheritance-like patterns.**
+State the bound explicitly when callers must move the future between threads:
 
 ```rust
-// ✘ WRONG: Deref polymorphism (anti-pattern)
-struct Button {
-    widget: Widget,
+trait Service: Sync {
+    fn fetch(&self) -> impl Future<Output = String> + Send;
 }
 
-impl Deref for Button {
-    type Target = Widget;
-    fn deref(&self) -> &Widget {
-        &self.widget  // Trying to "inherit" Widget methods
+struct Greeting(String);
+
+impl Service for Greeting {
+    async fn fetch(&self) -> String {
+        self.0.clone()
     }
 }
 
-// ✓ CORRECT: Explicit delegation
-struct Button {
-    widget: Widget,
+fn into_task<S>(service: S) -> impl Future<Output = String> + Send + 'static
+where
+    S: Service + Send + 'static,
+{
+    async move { service.fetch().await }
 }
 
-impl Button {
-    pub fn position(&self) -> Point {
-        self.widget.position()
-    }
+fn require_send_static(_: impl Future<Output = String> + Send + 'static) {}
+require_send_static(into_task(Greeting(String::from("hello"))));
+```
 
-    pub fn set_position(&mut self, pos: Point) {
-        self.widget.set_position(pos);
+The receiver is owned by the outer future. Its `Send + 'static` bounds and the method future's `Send` bound satisfy different parts of that task contract. See [async trait stabilization guidance](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html).
+
+For dynamic dispatch, make the returned future an explicit, uniform type:
+
+```rust
+use std::pin::Pin;
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+trait DynService: Send + Sync {
+    fn fetch(&self) -> BoxFuture<'_, String>;
+}
+
+struct Greeting(String);
+
+impl DynService for Greeting {
+    fn fetch(&self) -> BoxFuture<'_, String> {
+        Box::pin(async move { self.0.clone() })
     }
 }
 
-// ✓ CORRECT: Deref for actual smart pointers
-impl<T> Deref for MyBox<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
+let service: Box<dyn DynService> = Box::new(Greeting(String::from("hello")));
+let future = service.fetch();
+drop(future);
+```
+
+`async-trait` automates a boxed-future transformation and usually adds `Send` requirements; its `?Send` option permits local futures. It can remain useful for established generic APIs too. `trait-variant` generates trait variants with additional bounds, such as `Send`; it does not itself make native async methods dyn-compatible. Removing either macro requires checking the resulting signature and downstream callers, not only whether the local implementation compiles. See [`async-trait`](https://docs.rs/async-trait/) and [`trait-variant`](https://docs.rs/trait-variant/).
+
+## Associated Types and Lending APIs
+
+Use an ordinary associated type when the output type is fixed for an implementation. Use a generic associated type when it depends on another parameter, such as a borrow of the receiver:
+
+```rust
+trait LendingSource {
+    type Item<'a>
+    where
+        Self: 'a;
+
+    fn next(&mut self) -> Option<Self::Item<'_>>;
 }
 ```
 
-`Deref` should convert pointer-to-T to T, not convert between unrelated types.
+A source reusing internal storage can return a view tied to the current borrow. A caller must stop using that view before mutably borrowing the source for the next item. Ordinary immutable slice windows do not require a lending interface: standard iterators already express them.
 
-### Collections Implement FromIterator and Extend
+[redb's value and table APIs](../../resources/languages/rust/redb/src/types.rs) use lifetime-parameterized associated types for typed access to stored data. Follow the value representation and guard lifetime before attempting to remove a bound. For return-position `impl Trait`, see [precise capture](ownership.md#precise-rpit-capture); a capture list and an associated type solve different problems.
 
-**Enable `.collect()` and `.extend()` for custom collections.**
+## Conversions and Extension Traits
+
+Prefer implementing `From` and `TryFrom`; blanket implementations then provide `Into` and `TryInto`. Use `From` for an infallible, semantically appropriate conversion and `TryFrom` for validation that can fail.
 
 ```rust
+#[derive(Debug, PartialEq, Eq)]
+struct UserId(u64);
+
+impl From<u64> for UserId {
+    fn from(value: u64) -> Self { Self(value) }
+}
+
+let id: UserId = 42.into();
+assert_eq!(id, UserId(42));
+```
+
+Use extension traits to add methods to external types. This helper truncates a borrowed string at a UTF-8 boundary:
+
+```rust
+trait StrExt {
+    fn prefix_bytes(&self, limit: usize) -> &str;
+}
+
+impl StrExt for str {
+    fn prefix_bytes(&self, limit: usize) -> &str {
+        &self[..self.floor_char_boundary(limit)]
+    }
+}
+
+assert_eq!("éclair".prefix_bytes(1), "");
+assert_eq!("éclair".prefix_bytes(2), "é");
+```
+
+Use `Deref` for a transparent pointer-like access relationship when its implicit coercions and method lookup are intended. It is a poor substitute for inheritance between domain objects; explicit delegation or a shared trait keeps that contract clearer.
+
+## Collection Traits
+
+Support standard collection operations when they fit the abstraction:
+
+```rust
+use std::collections::HashSet;
+
 struct IdSet(HashSet<u64>);
 
 impl FromIterator<u64> for IdSet {
     fn from_iter<I: IntoIterator<Item = u64>>(iter: I) -> Self {
-        IdSet(iter.into_iter().collect())
+        Self(iter.into_iter().collect())
     }
 }
 
@@ -216,172 +228,38 @@ impl Extend<u64> for IdSet {
     }
 }
 
-// Now works with iterator methods
-let ids: IdSet = vec![1, 2, 3].into_iter().collect();
+let mut ids: IdSet = [1, 2].into_iter().collect();
+ids.extend([2, 3]);
+assert_eq!(ids.0.len(), 3);
 ```
 
-### Trait Object Upcasting (Rust 1.86+)
+Implement `IntoIterator` for owned and borrowed forms where appropriate, rather than adding an unrelated inherent method with the same name.
 
-**`dyn SubTrait` coerces to `dyn SuperTrait` natively.** No more manual `as_super()` conversion methods on every trait.
+## Sealing and Evolution
 
-```rust
-// ✓ CORRECT: upcasting Just Works since 1.86
-trait Animal { fn speak(&self); }
-trait Dog: Animal { fn fetch(&self); }
-
-struct Labrador;
-impl Animal for Labrador { fn speak(&self) { println!("woof"); } }
-impl Dog    for Labrador { fn fetch(&self) { /* ... */ } }
-
-fn make_sound(a: &dyn Animal) { a.speak(); }
-
-let d: &dyn Dog = &Labrador;
-make_sound(d);   // coerces &dyn Dog → &dyn Animal
-```
-
-Before 1.86, a workaround like this was necessary on every trait:
-
-```rust
-// ✘ OBSOLETE — delete this workaround in 1.86+ code
-trait Dog: Animal {
-    fn as_animal(&self) -> &dyn Animal;   // no longer needed
-}
-```
-
-### Native `async fn` and `impl Trait` in Traits (RPITIT, Rust 1.75+)
-
-**Traits can return `impl Trait` and declare `async fn` directly.** The `#[async_trait]` crate is no longer necessary for most cases.
-
-```rust
-// ✓ CORRECT: native async fn in traits (Rust 1.75+)
-trait Database {
-    async fn fetch(&self, id: u64) -> Option<Row>;
-    async fn save(&self, row: Row) -> bool;
-}
-
-// ✓ CORRECT: return-position impl Trait in traits
-trait Source {
-    fn records(&self) -> impl Iterator<Item = Record> + '_;
-}
-```
-
-**When `#[async_trait]` is still needed:** dynamic dispatch. `dyn Database` does not support native `async fn` directly (`dyn`-compatibility is an ongoing area of work). For `dyn Database`, either keep `#[async_trait]` or use the `trait-variant` crate.
-
-```rust
-// ✓ Use async_trait only when you need dyn
-#[async_trait]
-trait DynDatabase: Send + Sync {
-    async fn fetch(&self, id: u64) -> Option<Row>;
-}
-
-fn register(db: Box<dyn DynDatabase>) { … }
-```
-
-### Precise-Capture Syntax `use<…>`
-
-**`impl Trait` return types auto-capture in-scope lifetimes in the 2024 edition.** Opt out or narrow with `+ use<…>`.
-
-```rust
-// 2024 edition: auto-captures 'a
-fn iter<'a>(s: &'a [u8]) -> impl Iterator<Item = u8> {
-    s.iter().copied()
-}
-
-// Explicit narrow capture:
-fn partial<'a, T>(s: &'a [T]) -> impl Iterator<Item = &'a T> + use<'a, T> {
-    s.iter()
-}
-
-// Opt out of all capture:
-fn static_thing() -> impl Iterator<Item = u8> + use<> { 0..10 }
-```
-
-See [edition.md](edition.md) and [ownership.md](ownership.md) for the full capture story.
-
-### Generic Associated Types (GATs, Rust 1.65+)
-
-**Associated types can carry their own generic parameters — usually lifetimes.** The canonical use case is lending iterators and streaming APIs.
-
-```rust
-// ✓ GAT: associated type parameterized by a lifetime
-trait LendingIterator {
-    type Item<'a> where Self: 'a;
-
-    fn next(&mut self) -> Option<Self::Item<'_>>;
-}
-
-// Implement for a windowed view over a slice
-struct Windows<'slice, T> {
-    slice: &'slice [T],
-    size: usize,
-}
-
-impl<'slice, T> LendingIterator for Windows<'slice, T> {
-    type Item<'a> = &'a [T] where Self: 'a;
-
-    fn next(&mut self) -> Option<&[T]> {
-        if self.slice.len() < self.size { return None; }
-        let window = &self.slice[..self.size];
-        self.slice = &self.slice[1..];
-        Some(window)
-    }
-}
-```
-
-Use GATs when the associated type genuinely depends on a `&self` borrow — otherwise a regular associated type is simpler.
-
-### Use Sealed Traits for Implementation Control
-
-**Prevent external implementations when needed.**
+Seal a trait only when external implementations would constrain invariants or evolution in ways the API cannot support. Explain that choice to users:
 
 ```rust
 mod private {
     pub trait Sealed {}
+    impl Sealed for u8 {}
 }
 
-/// This trait cannot be implemented outside this crate.
-pub trait DatabaseDriver: private::Sealed {
-    fn connect(&self, url: &str) -> Connection;
+/// Implemented only for the representations supported by this crate.
+pub trait WireByte: private::Sealed {
+    fn byte(self) -> u8;
 }
 
-// Only types in this crate can implement Sealed
-impl private::Sealed for PostgresDriver {}
-impl DatabaseDriver for PostgresDriver {
-    fn connect(&self, url: &str) -> Connection { /* ... */ }
+impl WireByte for u8 {
+    fn byte(self) -> u8 { self }
 }
-
-// External crates can use the trait but not implement it
 ```
 
-## Summary
-
-- **NEVER** use `Deref` for inheritance-like patterns
-- **NEVER** implement `Into` or `TryInto` directly (implement `From`/`TryFrom`)
-- **DO** prefer generics over trait objects for static dispatch
-- **DO** use native `async fn` and RPIT in traits (1.75+); reach for `#[async_trait]` only for `dyn`
-- **DO** rely on trait-object upcasting (1.86+) — delete any manual `as_super()` helpers
-- **DO** use `+ use<…>` (2024 edition) to control RPIT lifetime capture
-- **DO** use `Self: Sized` to make traits object-safe
-- **DO** use extension traits for adding methods to external types
-- **DO** implement `FromIterator`/`Extend` for collections
-- **DO** use sealed traits when implementation must be controlled
-- **DON'T** create "god traits" with too many methods (split them)
-- **DON'T** keep `#[async_trait]` on traits that don't need `dyn` — it's pure overhead now
-
----
+Keep traits focused on behavior callers need. Adding required methods, removing blanket implementations, or changing future bounds may affect downstream implementations even when the trait has few methods.
 
 ## Related
 
-- [ownership.md](ownership.md) - Trait bounds and ownership
-- [types.md](types.md) - Deriving common traits
-- [quality.md](quality.md) - Trait naming conventions
-
-## References
-
-- [Rust API Guidelines: Flexibility](https://rust-lang.github.io/api-guidelines/flexibility.html)
-- [Rust Design Patterns: Deref Anti-Pattern](https://rust-unofficial.github.io/patterns/anti_patterns/deref.html)
-- [Rust Book: Traits](https://doc.rust-lang.org/book/ch10-02-traits.html)
-- [Async fn in traits announcement](https://blog.rust-lang.org/2023/12/21/async-fn-rpit-in-traits.html) - Stabilized 1.75
-- [Trait upcasting — Rust 1.86 release notes](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
-- [RFC 1598 — Generic Associated Types](https://rust-lang.github.io/rfcs/1598-generic_associated_types.html)
-- [trait-variant crate](https://docs.rs/trait-variant/) - Native + dyn bridging
+- [Ownership](ownership.md): lifetimes, `Send` task ownership, and capture
+- [Async I/O](async-io.md): Tokio examples and cancellation
+- [Source catalog](resources.md): Serde, redb, and ripgrep case studies
+- [Rust API Guidelines: flexibility](../../resources/languages/rust/api-guidelines/src/flexibility.md)

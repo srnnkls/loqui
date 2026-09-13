@@ -4,368 +4,194 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Unsafe
 
-Guidelines for writing and reviewing unsafe code.
+A safe API must uphold its safety invariants for every input that safe Rust can supply. Keep unsafe operations small, document the proof, and prefer an existing safe abstraction when it meets the requirement.
 
-## Core Principles
+## Establish a Sound Boundary
 
-### Unsafe is a Boundary, Not a Mode
-
-**Keep unsafe blocks minimal. Provide safe abstractions.**
+A comment saying “the caller ensures the pointer is valid” cannot make a safe function accepting arbitrary raw pointers sound. Accept a slice when that expresses the operation:
 
 ```rust
-// ✓ CORRECT: Safe wrapper that encapsulates raw pointer handling
-use std::ptr::NonNull;
+fn clear(bytes: &mut [u8]) {
+    bytes.fill(0);
+}
+
+let mut bytes = [1, 2, 3];
+clear(&mut bytes);
+assert_eq!(bytes, [0, 0, 0]);
+```
+
+If interoperability requires raw inputs, expose the caller obligations through an `unsafe fn` and a complete contract:
+
+```rust
+#![deny(unsafe_op_in_unsafe_fn)]
+
+/// Clears a caller-owned buffer.
+///
+/// # Safety
+///
+/// `ptr` must be non-null and aligned, even when `len` is zero. It must
+/// identify `len` initialized bytes within one allocation, valid for reads
+/// and writes for this call. No other pointer may access those bytes during
+/// the call. `len` must not exceed `isize::MAX`, and the addressed range
+/// must not wrap around the address space.
+pub unsafe fn clear_raw(ptr: *mut u8, len: usize) {
+    // SAFETY: The caller establishes the validity, size, and exclusive-access
+    // requirements of from_raw_parts_mut for the duration of this call.
+    let bytes = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+    bytes.fill(0);
+}
+
+let mut bytes = [1, 2, 3];
+// SAFETY: This array provides initialized, exclusive storage for three bytes.
+unsafe { clear_raw(bytes.as_mut_ptr(), bytes.len()) };
+assert_eq!(bytes, [0, 0, 0]);
+```
+
+For generic `T`, initialization and alignment concern `T`, and the total byte size is `len * size_of::<T>()`. Non-null and alignment requirements also apply to zero-sized types. An address-range check alone cannot establish allocation validity or exclusivity. Use the exact contract of [`from_raw_parts_mut`](https://doc.rust-lang.org/std/slice/fn.from_raw_parts_mut.html).
+
+## Tie Views to Their Storage
+
+Prefer a normal slice for a borrowed view. When an internal representation needs a raw pointer, encode its relationship to the source rather than manufacturing an unconstrained lifetime:
+
+```rust
 use std::marker::PhantomData;
 
-pub struct RawSlice<T> {
-    ptr: NonNull<T>,
+struct SliceView<'a, T> {
+    ptr: *const T,
     len: usize,
-    _marker: PhantomData<T>,
+    source: PhantomData<&'a [T]>,
 }
 
-impl<T> RawSlice<T> {
-    /// Creates a slice view from a raw pointer.
-    ///
-    /// # Safety
-    /// - `ptr` must be non-null and properly aligned for `T`
-    /// - `ptr` must be valid for reads of `len * size_of::<T>()` bytes
-    ///   for the lifetime of the returned `RawSlice`
-    /// - `len * size_of::<T>()` must not exceed `isize::MAX`
-    /// - The memory must not be mutated while this slice exists
-    pub unsafe fn from_raw(ptr: *const T, len: usize) -> Self {
-        Self {
-            ptr: NonNull::new_unchecked(ptr as *mut T),
-            len,
-            _marker: PhantomData,
-        }
+impl<'a, T> SliceView<'a, T> {
+    fn new(slice: &'a [T]) -> Self {
+        Self { ptr: slice.as_ptr(), len: slice.len(), source: PhantomData }
     }
 
-    // Safe API: internal unsafe is minimal and auditable
-    pub fn as_slice(&self) -> &[T] {
-        // SAFETY: Invariants established by from_raw()
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    fn as_slice(&self) -> &[T] {
+        // SAFETY: new obtains this range from a valid slice. The private
+        // fields preserve that range, and 'a keeps its shared borrow valid.
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 }
 
-// ✘ WRONG: Large unsafe block
-unsafe fn do_everything(ptr: *mut u8, len: usize) {
-    // 100 lines of code, hard to audit
-    // Which operations actually need unsafe?
-}
-
-// ✓ CORRECT: Isolate unsafe to the boundary
-fn do_everything_safe(ptr: *mut u8, len: usize) {
-    let slice = unsafe {
-        // SAFETY: Caller ensures ptr is valid for len bytes
-        std::slice::from_raw_parts_mut(ptr, len)
-    };
-
-    // Rest is safe Rust - no unsafe needed
-    process_slice(slice);
-}
+let storage = [10, 20];
+let view = SliceView::new(&storage);
+assert_eq!(view.as_slice(), &storage);
 ```
 
-**Don't reimplement safe APIs with unsafe:**
+`PhantomData` records a type relationship; it does not validate arbitrary raw inputs. All constructors, mutation paths, and unsafe implementations must preserve the representation's invariant. Review auto traits and variance if the abstraction grows; do not add `Send` or `Sync` implementations merely to silence an error.
+
+## Explain Every Unsafe Operation
+
+An unsafe function declares obligations for callers; an unsafe block discharges obligations for operations inside it. Edition 2024 enables `unsafe_op_in_unsafe_fn` as a warning by default. Use explicit blocks and consider denying the lint in the project:
 
 ```rust
-// ✘ WRONG: This is just slice.get() with extra risk
-fn bad_get(slice: &[u8], i: usize) -> Option<u8> {
-    if i < slice.len() {
-        Some(unsafe { *slice.get_unchecked(i) })
-    } else {
-        None
-    }
-}
+#![deny(unsafe_op_in_unsafe_fn)]
 
-// ✓ CORRECT: Use the safe API
-fn good_get(slice: &[u8], i: usize) -> Option<u8> {
-    slice.get(i).copied()
-}
-
-// ✓ CORRECT: get_unchecked can win when bounds are proven once, used many times
-fn sum_range(slice: &[u8], start: usize, end: usize) -> u8 {
-    assert!(end <= slice.len() && start <= end);
-    let mut sum = 0u8;
-    for i in start..end {
-        // SAFETY: assert above guarantees i < end <= len
-        sum = sum.wrapping_add(unsafe { *slice.get_unchecked(i) });
-    }
-    sum
-}
-```
-
-### Document Safety Invariants
-
-**Every `unsafe` block needs a `// SAFETY:` comment.**
-
-```rust
-/// Creates a string from UTF-8 bytes without validation.
+/// Reads one byte without bounds checking.
 ///
 /// # Safety
-///
-/// The caller must ensure that `bytes` contains valid UTF-8.
-/// Passing invalid UTF-8 is undefined behavior.
-pub unsafe fn from_utf8_unchecked(bytes: Vec<u8>) -> String {
-    // 2024 edition: unsafe_op_in_unsafe_fn warns by default.
-    // Wrap the unsafe call in an inner unsafe block with its own SAFETY comment.
-    // SAFETY: caller guarantees bytes are valid UTF-8 (propagated to the inner call).
-    unsafe { String::from_utf8_unchecked(bytes) }
-}
-
-impl MyVec<T> {
-    pub fn push(&mut self, value: T) {
-        if self.len == self.capacity {
-            self.grow();
-        }
-        // SAFETY: We just ensured len < capacity, so this write is in bounds.
-        // The pointer is properly aligned because it came from a Vec allocation.
-        unsafe {
-            std::ptr::write(self.ptr.add(self.len), value);
-        }
-        self.len += 1;
-    }
+/// `index` must be less than `bytes.len()`.
+pub unsafe fn read_unchecked(bytes: &[u8], index: usize) -> u8 {
+    debug_assert!(index < bytes.len());
+    // SAFETY: The caller guarantees the index is in bounds in all builds.
+    unsafe { *bytes.get_unchecked(index) }
 }
 ```
 
-### Use `debug_assert!` for Invariants
+The debug assertion helps detect a broken contract; it does not establish a safe API's precondition in release builds. A safe wrapper must check its inputs with an unconditional check or derive their validity from an existing invariant. Safety comments should explain the allocation, initialization, lifetime, aliasing, or synchronization facts the operation relies on.
 
-**Check invariants in debug builds.**
+## Use Safe Operations First
+
+Safe code can often express the same work without an unsafe proof:
 
 ```rust
-pub unsafe fn get_unchecked(slice: &[u8], index: usize) -> u8 {
-    debug_assert!(index < slice.len(), "index out of bounds");
-    // SAFETY: caller guarantees index is in bounds
-    unsafe { *slice.get_unchecked(index) }
+fn get(bytes: &[u8], index: usize) -> Option<u8> {
+    bytes.get(index).copied()
 }
 
-impl<T> MyVec<T> {
-    unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.capacity);
-        debug_assert!(
-            std::mem::size_of::<T>() == 0 || new_len <= isize::MAX as usize,
-            "capacity overflow"
-        );
-        // This method assigns to a field — no unsafe op is actually performed.
-        // The `unsafe fn` marker exists because the caller must uphold the invariant
-        // that the first `new_len` elements are initialized. Document that in SAFETY:
-        // on callers, not inside.
-        self.len = new_len;
-    }
+fn sum_range(bytes: &[u8], start: usize, end: usize) -> u8 {
+    bytes[start..end].iter().fold(0, |sum, byte| sum.wrapping_add(*byte))
+}
+
+fn copy_prefix(source: &[u8], destination: &mut [u8]) {
+    destination[..source.len()].copy_from_slice(source);
 }
 ```
 
-### Contain Unsafe in Small Modules
+These functions have safe failure behavior for out-of-range access. Introduce unchecked indexing only with evidence that it improves the relevant workload and a proof that covers every index. Keep synchronization, aliasing, and pointer arithmetic inside a small module whose safe interface preserves the invariant.
 
-**Isolate unsafe code for easier auditing.**
+## Initialization and Valid Representations
 
-```rust
-// src/raw.rs - All unsafe internals
-//! Raw pointer operations. Do not use directly.
-//!
-//! This module contains the unsafe implementation details.
-//! Use the safe wrappers in the parent module instead.
-
-pub(super) unsafe fn raw_copy(src: *const u8, dst: *mut u8, len: usize) {
-    // SAFETY: Caller ensures pointers are valid and non-overlapping
-    std::ptr::copy_nonoverlapping(src, dst, len);
-}
-
-// src/lib.rs - Safe public API
-mod raw;
-
-pub fn copy_slice(src: &[u8], dst: &mut [u8]) {
-    assert!(src.len() <= dst.len());
-    // SAFETY: Slices guarantee valid, properly aligned pointers.
-    // We checked that dst is large enough.
-    unsafe {
-        raw::raw_copy(src.as_ptr(), dst.as_mut_ptr(), src.len());
-    }
-}
-```
-
-### Don't trap into UB pitfalls
-
-**Know and avoid all forms of UB.**
+Uninitialized storage is not an initialized value. `MaybeUninit<T>` supports staged initialization; `assume_init` requires a valid `T` on every path that reaches it:
 
 ```rust
-// Common UB pitfalls:
-
-// 1. Null or dangling pointers
-let ptr: *const i32 = std::ptr::null();
-unsafe { *ptr }  // UB!
-
-// 2. Unaligned access
-let bytes: [u8; 4] = [1, 2, 3, 4];
-let ptr = bytes.as_ptr() as *const u32;
-unsafe { *ptr }  // UB if not aligned!
-
-// 3. Data races
-static mut COUNTER: u32 = 0;
-// Accessing from multiple threads without synchronization is UB
-
-// 4. Invalid values
-let b: bool = unsafe { std::mem::transmute(2u8) };  // UB! bool must be 0 or 1
-
-// 5. Breaking aliasing rules
-let mut x = 42;
-let r1 = &x as *const i32;
-let r2 = &mut x as *mut i32;
-unsafe {
-    *r2 = 10;
-    println!("{}", *r1);  // UB! r1 was invalidated by r2
-}
-```
-
-### Prefer Safe Alternatives
-
-**Use safe abstractions when available.**
-
-```rust
-// ✓ CORRECT: Use MaybeUninit for uninitialized memory (stable API)
 use std::mem::MaybeUninit;
 
-let mut array: [MaybeUninit<i32>; 10] = [const { MaybeUninit::uninit() }; 10];
-for (i, elem) in array.iter_mut().enumerate() {
-    elem.write(i as i32);
+let mut slots: [MaybeUninit<u32>; 4] = [const { MaybeUninit::uninit() }; 4];
+for (index, slot) in slots.iter_mut().enumerate() {
+    slot.write(index as u32);
 }
-// SAFETY: all 10 elements written above
-let array: [i32; 10] = array.map(|e| unsafe { e.assume_init() });
-
-// ✘ WRONG: Uninitialized memory via transmute
-let array: [i32; 10] = unsafe { std::mem::uninitialized() };  // UB!
-
-// ✓ CORRECT: Use Cell/RefCell for interior mutability
-use std::cell::RefCell;
-let data = RefCell::new(vec![1, 2, 3]);
-data.borrow_mut().push(4);
-
-// ✘ WRONG: Raw pointer casting for mutability
-let data = vec![1, 2, 3];
-let ptr = &data as *const _ as *mut Vec<i32>;
-unsafe { (*ptr).push(4); }  // UB!
+// SAFETY: Every element was initialized by the completed loop above.
+let values = slots.map(|slot| unsafe { slot.assume_init() });
+assert_eq!(values, [0, 1, 2, 3]);
 ```
 
-### 2024 Edition Changes
+For types with destructors, account for initialized elements if construction fails or unwinds; `MaybeUninit` does not drop their contents automatically. Prefer `std::array::from_fn` or a `Vec` when those safe APIs suffice.
 
-The 2024 edition tightens unsafe semantics in three places. `cargo fix --edition` handles most of the mechanical rewrite; the SAFETY comments are on you.
+Distinguish an all-zero representation from allowing every bit pattern:
 
-**1. Extern blocks must be marked `unsafe`.** The author of the block is asserting the signatures match foreign definitions — a classic UB trap that 2021 left implicit.
+| Type                     | Is the all-zero representation valid?     | Are all bit patterns valid?    |
+| ------------------------ | ----------------------------------------- | ------------------------------ |
+| Primitive integers       | Yes                                       | Yes                            |
+| `bool`                   | Yes: `false`                              | No: only 0 and 1               |
+| `char`                   | Yes: `'\0'`                               | No: only Unicode scalar values |
+| References, `NonZeroU32` | No                                        | No                             |
+| Enums                    | Depends on the type's validity and layout | Depends on the type            |
 
-```rust
-// ✘ Rust 2021
-extern "C" {
-    fn puts(s: *const c_char) -> c_int;
-}
+An unsafe trait promising zero-initializability must document precisely that guarantee; it must not conflate it with arbitrary-byte validity. Prefer an established abstraction with a suitable contract to inventing one for a single initialization site. See [`mem::zeroed`](https://doc.rust-lang.org/std/mem/fn.zeroed.html) and the [Reference's invalid-value rules](https://doc.rust-lang.org/reference/behavior-considered-undefined.html).
 
-// ✓ Rust 2024
+## Foreign Interfaces and Unsafe Attributes
+
+Edition 2024 requires `unsafe extern` blocks. The author must verify the ABI and declarations against the foreign definitions. `link_name` is an ordinary attribute on a foreign item:
+
+```rust,no_run
+use std::ffi::{c_char, c_int};
+
 unsafe extern "C" {
-    fn puts(s: *const c_char) -> c_int;
+    #[link_name = "puts"]
+    fn c_puts(text: *const c_char) -> c_int;
+}
+
+// SAFETY: c"hello" supplies a live, NUL-terminated C string. This declaration
+// assumes the target provides the C puts function with the signature above.
+unsafe { c_puts(c"hello".as_ptr()) };
+```
+
+The attributes requiring `#[unsafe(...)]` are `no_mangle`, `export_name`, and `link_section`. Their obligations concern the linker and target environment, not just Rust types. For example, an exported name must not collide with another symbol:
+
+```rust,no_run
+// SAFETY: The embedding application's symbol namespace reserves this name
+// for this function, whose signature matches its documented C interface.
+#[unsafe(export_name = "example_rust_api_version")]
+pub extern "C" fn api_version() -> u32 {
+    1
 }
 ```
 
-**2. Unsafe attributes require the `unsafe(…)` wrapper.**
+Changing the syntax does not verify the ABI, symbol uniqueness, or section placement. See [unsafe attributes](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-attributes.html) and [extern blocks](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-extern.html).
 
-```rust
-// ✓ Rust 2024
-#[unsafe(no_mangle)]
-pub extern "C" fn my_export() {}
+A newtype is not automatically FFI-compatible with its inner type; use a suitable `repr(transparent)` or `repr(C)` contract. CPU-feature-specific functions also retain target-feature calling requirements: a safe declaration with `#[target_feature]` is not blanket permission to call it on unsupported hardware. See the [Reference on target features](https://doc.rust-lang.org/reference/attributes/codegen.html#the-target_feature-attribute).
 
-#[unsafe(export_name = "custom_name")]
-pub extern "C" fn renamed() {}
+## Review and Validation
 
-#[unsafe(link_name = "libfoo_bar")]
-unsafe extern "C" {
-    fn bar();
-}
-```
+Check valid ranges, alignment, initialized values, live allocations, aliasing, synchronization, and panic paths. Exercise empty buffers, zero-sized types, and boundary arithmetic using valid inputs. Do not execute examples known to cause undefined behavior as ordinary tests.
 
-**3. `unsafe_op_in_unsafe_fn` is warn-by-default.** Unsafe operations inside an `unsafe fn` must be wrapped in an explicit inner `unsafe {}` block, with its own `// SAFETY:` comment.
-
-```rust
-// ✘ Invisible unsafe surface area
-unsafe fn dangerous(p: *const u8) -> u8 {
-    *p
-}
-
-// ✓ Explicit inner block — exactly where the unsafe op happens
-unsafe fn dangerous(p: *const u8) -> u8 {
-    // SAFETY: caller guarantees p is valid and properly aligned
-    unsafe { *p }
-}
-```
-
-**Why this matters:** inside a pre-2024 `unsafe fn`, every line was implicitly unsafe. You could dereference a raw pointer on line 37 of a 200-line function and nothing signaled "here be dragons." The 2024 change forces the unsafe surface to be visible — and auditable — even inside functions whose signature is already unsafe.
-
-See [edition.md](edition.md) for the full 2024 migration.
-
-### Unsafe Traits
-
-**Document safety requirements for implementors.**
-
-```rust
-/// A type that can be safely zeroed.
-///
-/// # Safety
-///
-/// Implementing this trait guarantees that a value of all zero bytes
-/// is a valid instance of the type. This is true for primitive integers,
-/// but NOT for types like `bool`, `char`, references, or enums.
-pub unsafe trait Zeroable {
-    fn zeroed() -> Self;
-}
-
-// Safe to implement for integers
-unsafe impl Zeroable for u32 {
-    fn zeroed() -> Self { 0 }
-}
-
-// NOT safe: bool must be 0 or 1, not arbitrary bytes
-// unsafe impl Zeroable for bool { ... }  // WRONG!
-```
-
-## Audit Checklist
-
-When reviewing unsafe code:
-
-1. **Is the unsafe actually necessary?** Can it be done safely?
-2. **Is the unsafe block minimal?** Only the required operations?
-3. **Is the edition 2024 or later?** `unsafe extern` / `#[unsafe(no_mangle)]` / inner-block style should all be in effect.
-4. **Is there an explicit inner `unsafe {}` inside every `unsafe fn`** that actually performs unsafe operations?
-5. **Are all safety invariants documented?** `// SAFETY:` comments on every unsafe block?
-6. **Are preconditions checked?** `debug_assert!` for invariants?
-7. **Is the safe wrapper sound?** Can safe code cause UB?
-8. **Are edge cases handled?** Zero-size types, overflow, alignment?
-
-## Summary
-
-- **NEVER** use large unsafe blocks (minimize scope)
-- **NEVER** use unsafe without documenting safety invariants
-- **DO** know the UB pitfalls: null/dangling pointers, unaligned access, data races, invalid values, aliasing violations
-- **DO** provide safe abstractions over unsafe internals
-- **DO** add `// SAFETY:` comments to every unsafe block
-- **DO** wrap unsafe ops inside `unsafe fn` bodies in explicit inner `unsafe {}` blocks (2024 edition warns by default)
-- **DO** mark all `extern` blocks as `unsafe extern`
-- **DO** use `#[unsafe(no_mangle)]` / `#[unsafe(link_name)]` / `#[unsafe(export_name)]`
-- **DO** use `debug_assert!` to check invariants
-- **DO** contain unsafe in small, auditable modules
-- **DO** prefer safe alternatives (`MaybeUninit`, `Cell`, etc.)
-- **DO** prefer safe `#[target_feature]` (1.86+) over `unsafe fn` for CPU-feature dispatch
-
----
+Run relevant tests with Miri when supported, and use sanitizers or FFI integration tests for the boundaries they cover. A passing run checks exercised executions; it is not a proof of soundness. The [Rustonomicon](https://doc.rust-lang.org/nomicon/) provides the broader model.
 
 ## Related
 
-- [edition.md](edition.md) - 2024 edition unsafe changes in detail
-- [modernization.md](modernization.md) - Safe `#[target_feature]` (1.86+)
-- [ownership.md](ownership.md) - Safe ownership patterns
-- [modules.md](modules.md) - Containing unsafe in modules
-- [errors.md](errors.md) - Documenting `# Safety` sections
-
-## References
-
-- [The Rustonomicon](https://doc.rust-lang.org/nomicon/)
-- [Rust Reference: Undefined Behavior](https://doc.rust-lang.org/reference/behavior-considered-undefined.html)
-- [Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/)
-- [RFC 2585 — Unsafe block in unsafe fn](https://rust-lang.github.io/rfcs/2585-unsafe-block-in-unsafe-fn.html)
-- [Unsafe attributes (2024 edition)](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-attributes.html)
-- [`unsafe extern` blocks (2024 edition)](https://doc.rust-lang.org/edition-guide/rust-2024/unsafe-extern.html)
+- [Ownership](ownership.md): borrowed views and valid replacement states
+- [Edition 2024](edition.md): migration steps
+- [Testing](test.md): native validation and doctests
+- [Source examples](resources.md): redb's guarded storage APIs
