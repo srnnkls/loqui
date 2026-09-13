@@ -4,328 +4,170 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Modernization
 
-Modern Rust features (1.80 → 1.95), `cargo fix --edition`, and how to keep AI-generated code current.
+This guide targets Rust 1.98.1 and edition 2024 as of 2026-09-13. Use released features when they simplify the actual contract; keep proposed changes separate from stable recommendations. Rust 1.98.1 fixes a vtable-generation miscompilation in 1.98.0, so use the patch release for this baseline. [Release announcement](https://blog.rust-lang.org/2026/09/03/Rust-1.98.1/)
 
----
+## Routine Checks and Deliberate Edits
 
-## AI Drift Warning
+Use the [routine validation commands](test.md#routine-validation) to check code without rewriting source files, including documentation tests and the project's supported build configurations.
 
-**AI agents — this one included — systematically generate pre-2024-edition Rust.** Two forces drive this:
-
-1. **Training cutoff.** A model's weights freeze at some date; anything stabilized after that date is literally unknown.
-2. **Frequency bias.** Years of pre-generics, pre-edition-2024 Rust outweigh the relatively recent let chains, async closures, `LazyLock`, native async in traits, `use<>` capture syntax. The model defaults to what it has seen most often.
-
-Practical symptoms in AI output:
-
-- `lazy_static!` / `once_cell::sync::Lazy` instead of `std::sync::LazyLock`
-- `#[async_trait]` where native `async fn` in traits suffices
-- Pyramids of nested `if let` instead of let chains
-- `extern "C" { … }` without the required 2024-edition `unsafe` prefix
-- `unsafe fn` bodies without the inner `unsafe {}` block (warn-by-default in 2024)
-- Manual `Captures<'a>` trick in return-position `impl Trait`
-- `cfg_if!` from the `cfg-if` crate instead of the stdlib `cfg_select!` macro
-
-**Mandatory habit for every code-gen session:**
+When automatic fixes are useful, apply them deliberately from a clean working tree:
 
 ```bash
-# From a clean git state:
-cargo fix --edition        # migrate to current edition if not already
-cargo clippy --fix         # apply machine-applicable clippy suggestions
-cargo test                 # confirm nothing broke
-git diff                   # review — these fixers are behavior-preserving
-git commit
-```
-
-Run this **after every significant generation**, not just edition transitions. The diff is usually surgical.
-
----
-
-## `cargo fix` and Clippy Modernizers
-
-Rust's modernization story is split across two tools:
-
-- **`cargo fix --edition`** — authoritative migration between editions. Handles RPIT capture, `unsafe extern`, `unsafe_op_in_unsafe_fn`, match-ergonomics, prelude additions.
-- **`cargo clippy --fix`** — applies machine-applicable clippy suggestions (many modernizers live here): `needless_return`, `redundant_clone`, `manual_let_else`, `or_fun_call`, `option_map_or_none`, plus hundreds more.
-
-```bash
-# Preview-only (prints diffs):
-cargo fix --edition --allow-dirty 2>&1 | head -50
-cargo clippy --fix --allow-dirty --allow-staged
-
-# In a clean tree, drop --allow-dirty / --allow-staged and review normally.
-```
-
-**Compose them:** `cargo fix --edition` first (structural), then `cargo clippy --fix` (idiomatic).
-
----
-
-## Stdlib-First Replacements
-
-The 1.80–1.95 window moved several community crates into stdlib. Before adding a dependency, check whether stdlib now covers it.
-
-| Old pattern / crate | Modern replacement | Since |
-|---|---|---|
-| `lazy_static::lazy_static!` | `std::sync::LazyLock::new(…)` | 1.80 |
-| `once_cell::sync::Lazy` | `std::sync::LazyLock` | 1.80 |
-| `once_cell::sync::OnceCell` | `std::sync::OnceLock` | 1.70 |
-| `once_cell::unsync::Lazy` | `std::cell::LazyCell` | 1.80 |
-| `cfg-if::cfg_if!` | `cfg_select!` macro | 1.95 |
-| `fs2::FileExt::try_lock_exclusive` | `std::fs::File::lock` | 1.89 |
-| Ad-hoc OS pipe wrappers | `std::io::pipe` | 1.87 |
-| `async_trait::async_trait` on a trait (not `dyn`) | native `async fn` in traits | 1.75 |
-| `Captures<'a>` RPIT workaround | `+ use<'a>` precise capture | 2024 edition |
-| `#[deny(unsafe_op_in_unsafe_fn)]` opt-in | warn-by-default in 2024 | 2024 edition |
-| Pyramid of `if let` … `if let` | Let chains | 1.88 (2024 edition) |
-| Manual CPU-feature dispatch via `unsafe` | Safe `#[target_feature]` | 1.86 |
-| `ptr::read(&x)` / transmute gymnastics | `Vec::pop_if` / `Vec::extract_if` | 1.86 / 1.87 |
-| `itertools::Itertools::tuple_windows::<[_; N]>` | `slice::array_windows::<N>()` | 1.94 |
-| `#[allow(lint)]` that might go stale | `#[expect(lint)]` (warns when lint stops firing) | 1.81 |
-| `rand` for crypto | Always use `rand` only for non-crypto; use `rand_chacha` / `ring` / `rustls::crypto` for crypto | — |
-
----
-
-## Language Feature Tour
-
-### Rust 1.80 (July 2024)
-
-```rust
-// LazyLock — stdlib replaces lazy_static!
-use std::sync::LazyLock;
-
-static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load().unwrap());
-
-// LazyCell — single-threaded equivalent (for thread_local! { … })
-use std::cell::LazyCell;
-thread_local! {
-    static CACHE: LazyCell<HashMap<String, u32>> = LazyCell::new(HashMap::new);
-}
-```
-
-### Rust 1.81 (September 2024)
-
-```rust
-// #[expect(lint)] — warns when the lint STOPS firing
-// (so stale allows don't rot silently)
-#[expect(clippy::cast_possible_truncation, reason = "value is clamped to u32 above")]
-let n = clamped_value as u32;
-```
-
-### Rust 1.82 (October 2024)
-
-```bash
-# cargo info — inspect a crate from the terminal
-cargo info serde
-# version, description, license, features, download count
-```
-
-### Rust 1.84 (January 2025)
-
-**MSRV-aware dependency resolver.** If your `Cargo.toml` declares `rust-version`, Cargo 1.84+ prefers dependency versions whose own MSRV is compatible — no more random breakage from a transitive dep that bumped its MSRV.
-
-```toml
-[package]
-rust-version = "1.85"
-```
-
-### Rust 1.85 (February 2025) — **Rust 2024 Edition stable**
-
-This is the largest edition ever shipped. See [edition.md](edition.md) for the full migration guide.
-
-```rust
-// Async closures — capture across await points
-async fn retry<F, T>(f: F) -> T
-where
-    F: AsyncFn() -> T,
-{
-    loop {
-        if let Ok(v) = f().await { return v; }
-    }
-}
-
-// Call with async closure:
-retry(async || fetch().await).await;
-
-// #[diagnostic::do_not_recommend] — hide misleading trait-impl suggestions
-#[diagnostic::do_not_recommend]
-impl<T: PrivateTrait> MyTrait for T { … }
-```
-
-### Rust 1.86 (April 2025)
-
-```rust
-// Trait object upcasting — at last
-trait Animal { fn speak(&self); }
-trait Dog: Animal { fn fetch(&self); }
-
-fn make_sound(a: &dyn Animal) { a.speak(); }
-
-let d: &dyn Dog = &Labrador;
-make_sound(d);   // dyn Dog coerces to dyn Animal
-
-// Safe #[target_feature]
-#[target_feature(enable = "avx2")]
-fn fast_path(data: &[f32]) -> f32 { … }   // now safe — caller in an AVX2 context
-
-// Vec::pop_if
-let top = v.pop_if(|x| *x > threshold);
-```
-
-### Rust 1.87 (May 2025)
-
-```rust
-// std::io::pipe — stdlib replaces ad-hoc pipe crates
-let (mut reader, mut writer) = std::io::pipe()?;
-
-// Vec::extract_if / HashMap::extract_if — drain-by-predicate, returning an iterator
-let evens: Vec<i32> = v.extract_if(.., |x| *x % 2 == 0).collect();
-```
-
-### Rust 1.88 (June 2025)
-
-```rust
-// Let chains — 2024 edition only
-if let Some(channel) = release_info()
-    && let Channel::Stable(v) = channel
-    && v.major == 1
-    && v.minor >= 88
-{
-    println!("let chains!");
-}
-```
-
-Cargo also gained automatic cache GC in 1.88: no more disk-filling `~/.cargo`.
-
-### Rust 1.89 (August 2025)
-
-```rust
-// Const generic _ inference
-fn identity<const N: usize>(arr: [i32; N]) -> [i32; N] { arr }
-let r = identity::<_>([1, 2, 3]);   // compiler infers N
-
-// File::lock — cross-platform advisory file locking in stdlib
-let f = File::open("config.toml")?;
-f.lock()?;
-// … work ...
-f.unlock()?;
-
-// Result::flatten
-let nested: Result<Result<i32, &str>, &str> = Ok(Ok(42));
-assert_eq!(nested.flatten(), Ok(42));
-```
-
-Cross-compiled doctests also landed in 1.89 — doctests now run under the `--target` you configured.
-
-### Rust 1.90 (September 2025)
-
-**LLD default linker on `x86_64-unknown-linux-gnu`.** No configuration needed. ~40% faster incremental builds, ~20% faster from-scratch on typical Linux dev boxes.
-
-```toml
-# Opt out in .cargo/config.toml if you hit edge cases:
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "linker-features=-lld"]
-```
-
-### Rust 1.91–1.94
-
-- **1.91** — Windows ARM64 (`aarch64-pc-windows-msvc`) promoted to Tier 1.
-- **1.93** — Stable C-style variadic declarations (`fn vprintf(fmt: *const c_char, args: ...) -> c_int`).
-- **1.94** — `slice::array_windows::<N>()` — overlapping const-size windows returning `[T; N]` not `&[T]`.
-
-```rust
-let data = [1u8, 2, 3, 4, 5];
-for w in data.array_windows::<3>() {
-    assert!(w.len() == 3);   // w is [u8; 3] by type
-}
-```
-
-### Rust 1.95 (April 2026) — Current
-
-```rust
-// cfg_select! — stdlib replacement for the cfg-if crate
-cfg_select! {
-    unix    => { fn platform_fn() { /* unix */ } }
-    windows => { fn platform_fn() { /* windows */ } }
-    _       => { fn platform_fn() { /* fallback */ } }
-}
-
-// if let guards in match arms
-match value {
-    Some(x) if let Ok(y) = compute(x) => {
-        // both x and y are bound here
-    }
-    _ => {}
-}
-```
-
----
-
-## Upgrade Checklist
-
-When bumping toolchain or migrating to the 2024 edition:
-
-```bash
-# 1. Clean working tree so the diff is reviewable
-git status
-
-# 2. Update toolchain
-rustup update stable
-rustc --version   # expect 1.95+ in April 2026
-
-# 3. Bump MSRV (if you ship a library)
-# Cargo.toml:
-#   rust-version = "1.85"   # or later
-#   edition = "2024"
-
-# 4. Automated edition migration
-cargo fix --edition            # structural
-cargo clippy --fix             # idiomatic
-
-# 5. Verify
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
-
-# 6. Review and commit
+cargo clippy --fix --workspace --all-targets
+cargo fmt --all
 git diff
-git commit -m "chore: modernize to Rust 1.95 / 2024 edition"
 ```
 
-Repeat after every toolchain bump and after any significant AI-generated change.
+These commands modify files. Review their changes and rerun the relevant checks; machine-applicable suggestions are not a proof of unchanged behavior. Piping their output or passing `--allow-dirty` does not turn them into a preview. `cargo fix --edition` belongs specifically to [edition migration](edition.md): run it while the old edition is still declared, then update the manifest. See the [Cargo command](https://doc.rust-lang.org/cargo/commands/cargo-fix.html) and [Clippy's automatic-fix documentation](https://doc.rust-lang.org/clippy/usage.html).
 
----
+Generated and handwritten code need the same review of compiler support and semantics. An older idiom or dependency is not itself evidence of a defect.
 
-## Summary
+## Toolchain, Edition, and MSRV
 
-- **DO** run `cargo fix --edition` and `cargo clippy --fix` after every code-gen session
-- **DO** target the 2024 edition (stable since 1.85) — it unlocks let chains, async closures, `use<>` capture
-- **DO** prefer stdlib over community crates where they now overlap (`LazyLock`, `OnceLock`, `File::lock`, `std::io::pipe`, `cfg_select!`)
-- **DO** use native `async fn` in traits — reach for `#[async_trait]` only when you need `dyn`
-- **DO** use `#[expect(lint)]` instead of `#[allow(lint)]` so stale allows warn
-- **DO** declare `rust-version` to get MSRV-aware dependency resolution
-- **DO** leave LLD as the default linker on Linux (1.90+) — big build-speed win
-- **DON'T** reach for `lazy_static!` / `once_cell::sync::Lazy` — stdlib has `LazyLock`
-- **DON'T** keep the `Captures<'a>` RPIT workaround — 2024 edition auto-captures
-- **DON'T** use pyramids of nested `if let` — let chains exist
-- **DON'T** trust AI-generated Rust blindly — frequency bias pulls it toward pre-2024 idioms
+A project can pin a reproducible development toolchain:
 
----
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+```
 
-## Related Files
+Keep `edition` and `rust-version` explicit in Cargo manifests. Using the latest compiler for development does not automatically raise a library's promised MSRV. If supporting older compilers, run checks on that minimum as well and verify the dependency graph. Virtual workspaces need an explicit resolver; `rust-version` alone does not guarantee compatible resolution. See [modules](modules.md).
 
-- [edition.md](edition.md) - Rust 2024 edition migration in depth
-- [traits.md](traits.md) - Trait object upcasting, native async in traits, GATs
-- [async-io.md](async-io.md) - Async closures, Axum 0.8, actor pattern
-- [types.md](types.md) - `LazyLock`, `OnceLock`, `Vec::extract_if`, `array_windows`
-- [unsafe.md](unsafe.md) - 2024 edition unsafe changes
-- [quality.md](quality.md) - Let chains, `#[expect(lint)]`, workspace lints
+## Standard-Library Alternatives
 
-## References
+Compare semantics before removing a dependency. These are candidate replacements, not automatic migrations:
 
-- [Rust 2024 Edition Guide](https://doc.rust-lang.org/edition-guide/rust-2024/) - Authoritative migration reference
-- [Cargo `fix --edition` docs](https://doc.rust-lang.org/cargo/commands/cargo-fix.html)
-- [Rust release blog](https://blog.rust-lang.org/) - Per-version release announcements
-- [releases.rs](https://releases.rs/) - Searchable API stabilization timeline
-- [Rust 1.85 release notes](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html) - 2024 edition + async closures
-- [Rust 1.86 release notes](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html) - Trait upcasting, safe `#[target_feature]`
-- [Rust 1.88 release notes](https://blog.rust-lang.org/2025/06/26/Rust-1.88.0.html) - Let chains, naked functions
-- [Rust 1.90 release notes](https://blog.rust-lang.org/2025/09/18/Rust-1.90.0.html) - LLD default on Linux
-- [Rust 1.95 release notes](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0.html) - `cfg_select!`, `if let` guards
+| Existing use                                                 | Standard option                           | Stable since | Contract to compare                                                 |
+| ------------------------------------------------------------ | ----------------------------------------- | ------------ | ------------------------------------------------------------------- |
+| Lazy shared initialization                                   | `std::sync::LazyLock`                     | 1.80         | Initialization, poisoning, required methods, MSRV                   |
+| Write-once shared storage                                    | `std::sync::OnceLock`                     | 1.70         | Fallible initialization and retry behavior                          |
+| Local lazy or write-once storage                             | `LazyCell` / `OnceCell` in `std::cell`    | 1.80 / 1.70  | Single-threaded access and API coverage                             |
+| `cfg-if` branches                                            | `cfg_select!`                             | 1.95         | First matching branch and supported compiler                        |
+| Blocking exclusive file lock                                 | `File::lock`                              | 1.89         | Blocking, platform, descriptor, and error semantics                 |
+| Nonblocking exclusive lock such as `fs2::try_lock_exclusive` | `File::try_lock`                          | 1.89         | Contention stays nonblocking; map error variants deliberately       |
+| OS pipe wrapper                                              | `std::io::pipe`                           | 1.87         | Handles, platform support, blocking behavior                        |
+| Historical RPIT `Captures` bound                             | `use<...>`                                | 1.82         | Required generic parameters and permitted lifetime capture          |
+| Boxed async trait method                                     | Native async / RPIT in traits             | 1.75         | Future `Send`, receiver lifetimes, dyn compatibility, API stability |
+| Decimal integer buffer formatting                            | `format_into` with `core::fmt::NumBuffer` | 1.98         | Supported format, buffer lifetime, measured performance             |
+
+For locking in particular, changing `try_lock` to `lock` changes contention into waiting. It is not a style-only substitution. Consult [`File`'s locking contracts](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock).
+
+Randomness is also an algorithm and seeding contract, not a blanket distinction between crate names. The `rand` ecosystem includes cryptographically suitable and unsuitable generators. For security-sensitive use, follow the selected implementation's `CryptoRng`, entropy, and reseeding requirements and the consuming cryptographic library's guidance. See the project's [cryptographic RNG guidance](https://rust-random.github.io/book/guide-rngs.html).
+
+## Stable Features Worth Knowing
+
+### Collection Operations
+
+```rust
+use std::collections::HashMap;
+
+// 1.86: the predicate receives &mut T.
+let mut values = vec![1, 2, 3, 4];
+assert_eq!(values.pop_if(|value| *value > 3), Some(4));
+
+// 1.87: extract matching Vec elements in the requested range.
+let evens: Vec<_> = values.extract_if(.., |value| *value % 2 == 0).collect();
+assert_eq!(evens, [2]);
+assert_eq!(values, [1, 3]);
+
+// 1.88: HashMap extraction has its own stabilization version.
+let mut counts = HashMap::from([("a", 1), ("b", 2)]);
+let removed: Vec<_> = counts.extract_if(|_, value| *value == 1).collect();
+assert_eq!(removed, [("a", 1)]);
+
+// 1.94: each window is a borrowed fixed-size array.
+for window in [1, 2, 3, 4].array_windows::<3>() {
+    let _: &[i32; 3] = window;
+}
+```
+
+Extraction iterators are lazy: unvisited elements remain when the iterator is dropped early. `array_windows` yields `&[T; N]`, so elements need not be `Copy`. See [collection guidance](types.md#collection-helpers) and the standard-library method contracts.
+
+### Control Flow and Conditional Compilation
+
+Let chains require edition 2024 and Rust 1.88. Async closures stabilized in 1.85, while `if let` match guards and `cfg_select!` arrived in 1.95:
+
+```rust
+let input = Some("42");
+let parsed = match input {
+    Some(text) if let Ok(value) = text.parse::<u32>() => Some(value),
+    _ => None,
+};
+assert_eq!(parsed, Some(42));
+
+cfg_select! {
+    unix => { const PLATFORM: &str = "unix"; }
+    windows => { const PLATFORM: &str = "windows"; }
+    _ => { const PLATFORM: &str = "other"; }
+}
+assert!(!PLATFORM.is_empty());
+```
+
+Use these where they improve clarity; nested control flow can still be appropriate. An async retry callback returning `Result<T, E>` needs that result type in its bound. See [async closures](async-io.md#async-closures-and-retries) and the [1.95 release notes](https://blog.rust-lang.org/2026/04/16/Rust-1.95.0/).
+
+### Range Values and Pattern Assertions (1.96)
+
+New `core::range` types separate the range value from its iterator. They can be `Copy` when their fields are, while range syntax still constructs the legacy `core::ops` types. Consider `RangeBounds` when an API should accept both. The pattern-assertion macros require an explicit import; they are not in the prelude. [1.96 release notes](https://blog.rust-lang.org/2026/05/28/Rust-1.96.0/)
+
+```rust
+use core::{assert_matches, range::Range};
+
+let range = Range { start: 1, end: 4 };
+let saved = range;
+assert_eq!(range.into_iter().sum::<i32>(), 6);
+assert_eq!(saved.start, 1);
+assert_matches!(Some(42), Some(value) if value > 0);
+```
+
+### Cargo Warning Policy (1.97)
+
+Cargo can deny warnings without invalidating the build cache by changing `RUSTFLAGS`:
+
+```bash
+CARGO_BUILD_WARNINGS=deny cargo check --workspace --all-targets --keep-going
+```
+
+Treat this as a CI policy, separate from source-level lint selection. Keep documentation tests and Clippy in the relevant validation jobs. [1.97 release notes](https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/)
+
+### Integer Formatting and Floating-Point Contracts (1.98)
+
+Use a reusable buffer when decimal integer formatting should avoid an owned string:
+
+```rust
+use core::fmt::NumBuffer;
+
+let mut buffer = NumBuffer::new();
+let text = 1234_u64.format_into(&mut buffer);
+assert_eq!(text, "1234");
+```
+
+The returned string borrows the buffer. This is a focused alternative to formatting into a `String`, not a replacement for all formatting features.
+
+The algebraic floating-point methods permit optimizations such as reassociation that ordinary operators do not promise. Results can be nondeterministic. Use them only when that numerical contract is acceptable and measurements justify the choice. [1.98 release notes](https://blog.rust-lang.org/2026/08/20/Rust-1.98.0/)
+
+## 2027 Watchlist
+
+Status checked on 2026-09-13. These project goals and nightly developments are planning evidence, not stable release commitments. The suggested responses below are design recommendations inferred from that evidence.
+
+| Area                                                          | Current evidence                                                                                                              | How to prepare                                                                                                                                 |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Conditional borrowing                                         | [Polonius alpha enabled on nightly in August 2026](https://blog.rust-lang.org/2026/08/04/enabling-polonius-alpha-on-nightly/) | Revisit workarounds after stabilization. Ordinary disjoint-field borrowing already works on stable.                                            |
+| Trait solving                                                 | [Next solver enabled on nightly in August 2026](https://blog.rust-lang.org/2026/08/21/enabling-next-solver-on-nightly/)       | Check difficult cases on a dated nightly separately from supported stable compilers. Solver progress does not stabilize every related feature. |
+| Async trait objects, return-type notation, named opaque types | [Async roadmap](https://goals.rust-lang.org/2026/roadmap-just-add-async.html)                                                 | Preserve explicit `Send`, lifetime, allocation, and dispatch contracts until a stable alternative meets them.                                  |
+| View types and richer borrowing                               | [Borrow-checker roadmap](https://goals.rust-lang.org/2026/roadmap-borrow-checker-within.html)                                 | Keep narrower field access in current APIs; do not teach proposed method-view syntax as stable.                                                |
+| Pointer projection and in-place initialization                | [Reference and pointer roadmap](https://goals.rust-lang.org/2026/roadmap-beyond-the-ampersand.html)                           | Retain today's validity proofs and safe initialization options; reassess when APIs and contracts stabilize.                                    |
+| Guaranteed destruction and cancellation                       | [`Move` goal](https://goals.rust-lang.org/2026/move-trait.html)                                                               | Document present cancellation and cleanup behavior. Ordinary `Drop` does not promise async cleanup or universal destruction.                   |
+| Const traits, ADT const parameters, reflection                | [Const roadmap](https://goals.rust-lang.org/2026/roadmap-constify-all-the-things.html)                                        | Keep experiments separate; do not mandate replacing procedural macros based on proposed capabilities.                                          |
+| Edition-dependent library evolution                           | [Library API evolution goal](https://goals.rust-lang.org/2026/library-api-evolution.html)                                     | Follow range and migration design, without treating illustrative 2027 syntax as a supported edition.                                           |
+
+Keep stable examples compilable with the declared toolchain. Give experiments a separate compiler version, feature flags, and status; do not publish `edition = "2027"` or generator syntax as current production guidance.
+
+## Related
+
+- [Edition migration](edition.md)
+- [Traits](traits.md) and [async I/O](async-io.md)
+- [Workspace and MSRV configuration](modules.md)
+- [Pinned reference sources](resources.md)

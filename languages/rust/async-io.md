@@ -4,426 +4,241 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Async I/O
 
-Async/await patterns, tokio, concurrency, and I/O guidelines.
+Async allows tasks to yield while waiting. Design the executor workload, task ownership, deadlines, and cancellation behavior together. The examples below use Tokio 1.x with the features they exercise enabled; see the [vendored source catalog](resources.md).
 
-## Core Guidelines
+## Keep Blocking Work off Executor Threads
 
-### Async Only for I/O-Bound Operations
-
-**Don't use async for CPU-bound work.**
+Small computations belong inside async functions when useful. Sustained CPU work and blocking calls can prevent other tasks from progressing. Use async I/O APIs, or move blocking operations to `spawn_blocking`:
 
 ```rust
-// ✓ CORRECT: Async for I/O
-async fn fetch_data(url: &str) -> Result<String, Error> {
-    let response = reqwest::get(url).await?;
-    response.text().await
-}
+use std::{error::Error, path::PathBuf};
 
-// ✓ CORRECT: CPU work on blocking thread pool
-async fn process_image(data: Vec<u8>) -> Result<Vec<u8>, Error> {
-    tokio::task::spawn_blocking(move || {
-        // CPU-intensive work runs on blocking thread
-        expensive_image_processing(&data)
-    }).await?
-}
+type ReadError = Box<dyn Error + Send + Sync>;
 
-// ✘ WRONG: CPU work blocking the async runtime
-async fn bad_process(data: &[u8]) -> Vec<u8> {
-    expensive_computation(data)  // Blocks executor thread!
+async fn read_file(path: PathBuf) -> Result<String, ReadError> {
+    let contents = tokio::task::spawn_blocking(move || {
+        std::fs::read_to_string(path)
+    }).await??;
+    Ok(contents)
 }
 ```
 
-### Never Block the Async Runtime
+The first `?` handles `JoinError`; the second handles the I/O error. After both, the value is a `String`, so a `Result<String, _>` function must return `Ok(contents)`. `tokio::fs::read_to_string(path).await` is the simpler option when its interface fits.
 
-**Use `spawn_blocking` for blocking operations.**
+Limit the concurrency of CPU-heavy work, using a semaphore or a dedicated compute pool where appropriate. Tokio's blocking pool can grow substantially; `spawn_blocking` is not an automatic CPU scheduling policy. A blocking task that has started cannot generally be stopped by aborting its handle. See [Tokio's implementation and contract](../../resources/languages/rust/tokio/tokio/src/task/blocking.rs).
 
-```rust
-// ✘ WRONG: Blocking I/O in async context
-async fn bad_read_file(path: &Path) -> Result<String, Error> {
-    std::fs::read_to_string(path)  // Blocks the executor!
-}
+## Keep Lock Scopes Deliberate
 
-// ✓ CORRECT: Use async file I/O
-async fn read_file(path: &Path) -> Result<String, Error> {
-    tokio::fs::read_to_string(path).await
-}
-
-// ✓ CORRECT: Or spawn_blocking for std I/O
-async fn read_file_blocking(path: PathBuf) -> Result<String, Error> {
-    tokio::task::spawn_blocking(move || {
-        std::fs::read_to_string(&path)
-    }).await??  // Outer ? propagates JoinError, inner ? propagates io::Error
-}
-```
-
-### Avoid Holding Locks Across `.await`
-
-**Standard `Mutex` guards block other tasks on the same executor thread.**
+A standard mutex is often appropriate for short, uncontended access that does not span `.await`. Give the guard a lexical scope so its release is visible:
 
 ```rust
 use std::sync::Mutex;
 
-// ✘ WRONG: Lock held across await point
-async fn bad_update(state: &Mutex<State>) {
-    let mut guard = state.lock().unwrap();
-    let data = fetch_data().await;  // Other tasks on this thread can't acquire lock!
-    guard.value = data;
+async fn observe(state: &Mutex<String>) -> String {
+    let snapshot = {
+        state.lock().expect("state mutex is not poisoned").clone()
+    };
+    tokio::task::yield_now().await;
+    snapshot
 }
-
-// ✓ CORRECT: Scope the lock, then await
-async fn good_update(state: &Mutex<State>) {
-    let current = state.lock().unwrap().value.clone();  // Lock released here
-    let data = fetch_data_based_on(current).await;
-    state.lock().unwrap().value = data;  // Re-acquire briefly
-}
-
-// ✓ OK: tokio::sync::Mutex when you genuinely need lock across await
-use tokio::sync::Mutex as AsyncMutex;
-
-async fn async_mutex_update(state: &AsyncMutex<State>) {
-    let mut guard = state.lock().await;
-    guard.value = fetch_data().await;  // Allowed, but consider if you really need this
-}  // Caution: holding locks across await can cause contention
 ```
 
-Prefer restructuring to scope locks tightly. Use `tokio::sync::Mutex` only when the lock genuinely must span an await—it has higher overhead than `std::sync::Mutex`.
+A snapshot can become stale while a task awaits. Reacquiring the lock to commit a result requires checking the state again if concurrent updates matter. Splitting the critical section is not automatically behavior-preserving.
 
-### Always Set Timeouts
+Use `tokio::sync::Mutex` when an async operation needs a guard across suspension or when asynchronous acquisition is otherwise required. It avoids blocking the executor while waiting for the lock, but still serializes access. Review contention, reentrancy, and cancellation paths.
 
-**Every async I/O operation should have a timeout.**
+## Deadlines and Cancellation
+
+Set a deadline where the operation's contract needs bounded waiting. Prefer a shared overall deadline when repeated per-step timeouts could exceed the caller's budget. Long-lived subscriptions may instead use explicit shutdown.
 
 ```rust
-use tokio::time::{timeout, Duration};
+use tokio::time::{timeout, Duration, error::Elapsed};
 
-// ✓ CORRECT: Explicit timeout
-async fn fetch_with_timeout(url: &str) -> Result<String, Error> {
-    let response = timeout(
-        Duration::from_secs(30),
-        reqwest::get(url)
-    ).await??;
-
-    timeout(
-        Duration::from_secs(60),
-        response.text()
-    ).await?
-}
-
-// ✘ WRONG: No timeout, can hang forever
-async fn fetch_no_timeout(url: &str) -> Result<String, Error> {
-    let response = reqwest::get(url).await?;
-    response.text().await
+async fn with_timeout<T>(operation: impl Future<Output = T>) -> Result<T, Elapsed> {
+    timeout(Duration::from_secs(30), operation).await
 }
 ```
 
-### Structured Concurrency with JoinSet
+Timeouts are cooperative: an operation that does not yield can run past the deadline. Dropping a future does not roll back completed effects or automatically stop work already spawned elsewhere. Decide what partial progress, retries, and cleanup mean for the operation.
 
-**Prefer `JoinSet` over raw `spawn` for managing concurrent tasks.**
-
-```rust
-use tokio::task::JoinSet;
-
-// ✓ CORRECT: Structured concurrency
-async fn fetch_all(urls: Vec<String>) -> Vec<Result<String, Error>> {
-    let mut set = JoinSet::new();
-
-    for url in urls {
-        set.spawn(async move {
-            fetch_data(&url).await
-        });
-    }
-
-    let mut results = Vec::new();
-    while let Some(result) = set.join_next().await {
-        results.push(result.unwrap_or_else(|e| Err(e.into())));
-    }
-    results
-}
-
-// ✘ FRAGILE: Raw spawns, harder to track
-async fn fetch_all_raw(urls: Vec<String>) {
-    for url in urls {
-        tokio::spawn(async move {
-            fetch_data(&url).await
-        });
-        // Tasks are orphaned, no way to await them all
-    }
-}
-```
-
-### Use `select!` Carefully
-
-**Handle all branches, consider cancellation safety.**
-
-```rust
-use tokio::select;
-
-// ✓ CORRECT: Proper select with cancellation handling
-async fn fetch_or_timeout(url: &str) -> Result<String, Error> {
-    let fetch = fetch_data(url);
-    let timeout = tokio::time::sleep(Duration::from_secs(30));
-
-    select! {
-        result = fetch => result,
-        _ = timeout => Err(Error::Timeout),
-    }
-}
-
-// Document cancellation behavior
-/// Fetches data with a deadline.
-///
-/// # Cancellation Safety
-///
-/// If the timeout fires first, the fetch is cancelled mid-flight.
-/// No partial data is returned.
-async fn documented_fetch(url: &str) -> Result<String, Error> {
-    // ...
-}
-```
-
-### Prefer `async fn` Over Manual Futures
-
-**Use `async fn` unless you need specific lifetime control.**
-
-```rust
-// ✓ PREFERRED: async fn
-async fn process(data: &str) -> Result<Output, Error> {
-    // implementation
-}
-
-// ✓ OK: When you need to name the future type
-fn process_named(data: &str) -> impl Future<Output = Result<Output, Error>> + '_ {
-    async move {
-        // implementation
-    }
-}
-
-// ✓ OK: When lifetime elision doesn't work
-fn process_explicit<'a>(data: &'a str) -> impl Future<Output = &'a str> + 'a {
-    async move { data }
-}
-```
-
-### Async Trait Methods
-
-**Default to native `async fn` in traits (stable since Rust 1.75).** Only reach for `#[async_trait]` when you need `dyn Trait`.
-
-```rust
-// ✓ CORRECT: native async fn in traits — no macros, no boxed futures
-trait AsyncReader {
-    async fn read(&mut self) -> Result<Vec<u8>, Error>;
-}
-
-// Use when concrete types are known at compile time (static dispatch).
-async fn consume<R: AsyncReader>(mut r: R) -> Result<(), Error> {
-    let bytes = r.read().await?;
-    // ...
-    Ok(())
-}
-
-// ✓ Keep #[async_trait] only when you need dyn dispatch
-use async_trait::async_trait;
-
-#[async_trait]
-trait DynService: Send + Sync {
-    async fn call(&self, request: Request) -> Response;
-}
-
-fn register(svc: Box<dyn DynService>) { /* ... */ }
-```
-
-**Why the split:** native `async fn` returns an anonymous `impl Future`, which doesn't fit in a `dyn Trait` vtable. `#[async_trait]` works around this by boxing the future — with allocation overhead. For static dispatch (the common case), native is strictly better. For dynamic dispatch, you still need `#[async_trait]` or `trait-variant`.
-
-See [traits.md](traits.md) for the full discussion.
-
-### Async Closures (Rust 1.85+)
-
-**`async ‖ { … }` creates an async closure that can capture environment references across `.await` points.** A regular closure that returns an `async { … }` block can't.
-
-```rust
-// ✓ CORRECT: higher-order async function taking an async closure
-async fn retry<F, T>(f: F) -> T
-where
-    F: AsyncFn() -> T,
-{
-    loop {
-        if let Ok(v) = std::panic::AssertUnwindSafe(f()).await {
-            return v;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-// Call with an async closure — captures `state` by reference across awaits
-let state = load_state();
-retry(async || fetch_with(&state).await).await;
-```
-
-The three new trait flavors:
-
-- `AsyncFnOnce` — consumes captured state on first call
-- `AsyncFnMut` — mutates captured state between calls
-- `AsyncFn` — borrows captured state immutably
-
-Prefer async closures over `Fn() -> impl Future` boilerplate when you need to capture references across awaits.
-
-### Axum 0.8 Handler Style (January 2025)
-
-**Axum 0.8 dropped the `#[async_trait]` requirement from handlers and extractors** thanks to native `async fn` in traits. Handlers are now just `async fn`s that take extractors and return an `IntoResponse`.
-
-```rust
-use axum::{routing::get, Router, extract::State, Json};
-use std::sync::Arc;
-
-#[derive(Clone)]
-struct AppState {
-    db: Arc<dyn Database + Send + Sync>,
-}
-
-async fn get_user(State(state): State<AppState>) -> Json<User> {
-    Json(state.db.fetch(1).await)
-}
-
-#[tokio::main]
-async fn main() {
-    let app = Router::new()
-        .route("/user", get(get_user))
-        .with_state(AppState { db: Arc::new(Pg::new()) });
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-```
-
-Migration from 0.7 is mostly mechanical: drop `#[async_trait]` annotations from custom extractors and `FromRequestParts` impls; the compiler flags the rest.
-
-### Actor Pattern with Tokio Channels
-
-**For shared mutable state in async code, prefer an actor (owned-state + channel) over a `Mutex` on hot paths.** The actor holds the state exclusively; callers send commands; no lock contention.
+When a branch completes, Tokio's `select!` drops the other futures it owns. Selecting on a mutable reference to a pinned future instead leaves that underlying future alive. Whether recreating a future loses data depends on the operation's contract:
 
 ```rust
 use tokio::sync::{mpsc, oneshot};
 
-enum Cmd {
-    Inc,
-    Get(oneshot::Sender<u64>),
+async fn receive_or_stop(
+    receiver: &mut mpsc::Receiver<u32>,
+    stop: oneshot::Receiver<()>,
+) -> Option<u32> {
+    tokio::select! {
+        message = receiver.recv() => message,
+        _ = stop => None,
+    }
+}
+```
+
+`mpsc::Receiver::recv` is cancellation-safe here. Operations such as `read_exact` and `write_all` can make partial progress before cancellation; restarting them can lose that progress. Canceling a pending channel `send(value)` drops the owned value with the future, unlike a completed `Err(SendError(value))`. Consider reserving capacity before transferring ownership when losing the value is unacceptable. Consult [Tokio's `select!` documentation](../../resources/languages/rust/tokio/tokio/src/macros/select.rs) and [bounded channel source](../../resources/languages/rust/tokio/tokio/src/sync/mpsc/bounded.rs).
+
+## Track and Bound Spawned Tasks
+
+Keep handles when results, errors, or shutdown matter. `JoinSet` is useful for a group with shared lifetime and completion-order results; a single `JoinHandle` can be sufficient for one task. This example bounds the number of active tasks:
+
+```rust
+use std::num::NonZeroUsize;
+use tokio::task::{JoinError, JoinSet};
+
+async fn lengths(
+    names: Vec<String>,
+    concurrency: NonZeroUsize,
+) -> Result<Vec<usize>, JoinError> {
+    let mut input = names.into_iter();
+    let mut tasks = JoinSet::new();
+    let mut output = Vec::new();
+
+    loop {
+        while tasks.len() < concurrency.get() {
+            let Some(name) = input.next() else { break };
+            tasks.spawn(async move {
+                tokio::task::yield_now().await;
+                name.len()
+            });
+        }
+        let Some(result) = tasks.join_next().await else { break };
+        match result {
+            Ok(length) => output.push(length),
+            Err(error) => {
+                tasks.shutdown().await;
+                return Err(error);
+            }
+        }
+    }
+    Ok(output)
 }
 
-async fn counter_actor(mut rx: mpsc::Receiver<Cmd>) {
-    let mut count = 0u64;
-    while let Some(cmd) = rx.recv().await {
-        match cmd {
-            Cmd::Inc => count += 1,
-            Cmd::Get(tx) => { let _ = tx.send(count); }
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let mut result = lengths(vec!["a".into(), "abc".into()], NonZeroUsize::new(2).unwrap())
+        .await.unwrap();
+    result.sort_unstable();
+    assert_eq!(result, [1, 3]);
+}
+```
+
+Dropping a `JoinSet` requests abortion of its tasks; that does not synchronously wait for their termination. `shutdown().await` waits after requesting abortion, subject to the tasks' cancellation behavior. Add a cooperative shutdown protocol when work needs to finish or flush state. If output order matters, retain input indices instead of relying on completion order.
+
+## Async Trait Contracts and Spawn
+
+The receiver being `Send + Sync` does not make a native async trait method's future `Send`. A generic spawn path needs a future bound in the trait:
+
+```rust
+trait Service: Sync {
+    fn fetch(&self) -> impl Future<Output = String> + Send;
+}
+
+struct Greeting(String);
+impl Service for Greeting {
+    async fn fetch(&self) -> String { self.0.clone() }
+}
+
+fn spawn_fetch<S>(service: S) -> tokio::task::JoinHandle<String>
+where
+    S: Service + Send + 'static,
+{
+    tokio::spawn(async move { service.fetch().await })
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let result = spawn_fetch(Greeting(String::from("hello"))).await.unwrap();
+    assert_eq!(result, "hello");
+}
+```
+
+For a `dyn` interface, use a boxed-future contract or `async-trait`. `trait-variant` can generate `Send` variants, but does not provide dynamic dispatch for native async methods. See [traits](traits.md#async-methods-decide-the-future-contract) before removing a macro from an existing public API.
+
+Prefer `async fn` for ordinary async functions. `fn -> impl Future` is useful for explicit bounds, capture control, or eager setup before constructing a future; it still returns an opaque type rather than giving the future a public concrete name.
+
+## Async Closures and Retries
+
+`async || { ... }` creates an async closure. The `AsyncFn`, `AsyncFnMut`, and `AsyncFnOnce` traits model shared, mutable, and consuming calls. They can express lending relationships that a regular `FnMut` returning one fixed future type cannot. Ordinary closures can still return futures that borrow externally owned data; borrowing across `.await` is not exclusive to async closures.
+
+A retry callback returning `Result<T, E>` needs that result type in its bound. Bound the attempts and decide which errors are retryable:
+
+```rust
+use std::num::NonZeroUsize;
+use tokio::time::{sleep, Duration};
+
+async fn retry<F, T, E>(
+    mut operation: F,
+    attempts: NonZeroUsize,
+    should_retry: impl Fn(&E) -> bool,
+) -> Result<T, E>
+where
+    F: AsyncFnMut() -> Result<T, E>,
+{
+    let mut remaining = attempts.get();
+    loop {
+        match operation().await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                remaining -= 1;
+                if remaining == 0 || !should_retry(&error) {
+                    return Err(error);
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
         }
     }
 }
 
-// Callers hold only the Sender — no shared data, no lock.
-#[derive(Clone)]
-struct CounterHandle {
-    tx: mpsc::Sender<Cmd>,
-}
-
-impl CounterHandle {
-    pub fn new() -> Self {
-        let (tx, rx) = mpsc::channel(64);
-        tokio::spawn(counter_actor(rx));
-        Self { tx }
-    }
-    pub async fn inc(&self) { let _ = self.tx.send(Cmd::Inc).await; }
-    pub async fn get(&self) -> u64 {
-        let (tx, rx) = oneshot::channel();
-        let _ = self.tx.send(Cmd::Get(tx)).await;
-        rx.await.unwrap_or(0)
-    }
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    let text = String::from("hello");
+    let result = retry(async || Ok::<_, ()>(text.as_str()), NonZeroUsize::new(3).unwrap(), |_| true)
+        .await.unwrap();
+    assert_eq!(result, "hello");
 }
 ```
 
-**When to use actor vs `tokio::sync::Mutex`:** use actor when operations are naturally sequential (counter, state machine, coordinated writes). Use `RwLock`/`Mutex` when operations are genuinely concurrent-read (cache lookups, configuration).
+This retries returned errors. `AssertUnwindSafe` only asserts an unwind-safety property; it does not catch panics. A production retry policy also needs to account for idempotency, total deadlines, cancellation, and appropriate backoff.
 
-### OS Pipes with `std::io::pipe` (Rust 1.87+)
+## Channels and Owned State
 
-Stdlib `std::io::pipe()` replaces ad-hoc pipe crates:
+Choose a channel for the communication contract:
+
+| Channel        | Contract                                                                  |
+| -------------- | ------------------------------------------------------------------------- |
+| Bounded `mpsc` | Multiple senders, one receiver, backpressure at capacity                  |
+| `oneshot`      | One response or cancellation when the sender disappears                   |
+| `broadcast`    | Multiple subscribers; slow receivers can report lag and miss old messages |
+| `watch`        | Latest state; intermediate updates may be coalesced                       |
+
+An actor owns mutable state and processes commands sequentially. This can clarify ownership and coordinate operations, but message queues still introduce waiting and overhead. A mutex can be simpler for short shared-state access. Return send/receive failures instead of disguising a stopped actor as a valid default result:
 
 ```rust
-let (mut reader, mut writer) = std::io::pipe()?;
-std::thread::spawn(move || {
-    let _ = writer.write_all(b"hello");
-});
-let mut buf = String::new();
-reader.read_to_string(&mut buf)?;
-```
+use tokio::sync::oneshot;
 
-### Channel Patterns
-
-**Use appropriate channel types for the use case.**
-
-```rust
-use tokio::sync::{mpsc, oneshot, broadcast};
-
-// mpsc: Multiple producers, single consumer
-async fn worker_pool() {
-    let (tx, mut rx) = mpsc::channel::<Task>(100);
-
-    // Spawn workers
-    tokio::spawn(async move {
-        while let Some(task) = rx.recv().await {
-            process(task).await;
-        }
+async fn request_response() -> Result<u64, oneshot::error::RecvError> {
+    let (sender, receiver) = oneshot::channel();
+    let worker = tokio::spawn(async move {
+        // A dropped receiver means the caller no longer needs this response.
+        let _ = sender.send(42);
     });
-}
-
-// oneshot: Single response
-async fn request_response() {
-    let (tx, rx) = oneshot::channel();
-
-    tokio::spawn(async move {
-        let result = compute().await;
-        let _ = tx.send(result);
-    });
-
-    let result = rx.await?;
-}
-
-// broadcast: Multiple consumers, all receive
-async fn pub_sub() {
-    let (tx, _rx) = broadcast::channel::<Event>(100);
-
-    // Each subscriber gets all messages
-    let mut rx1 = tx.subscribe();
-    let mut rx2 = tx.subscribe();
+    let result = receiver.await;
+    worker.await.expect("response task must not panic");
+    result
 }
 ```
 
-## Summary
+An `mpsc` receiver is not a multi-consumer worker pool by itself. Define how work is dispatched and how tasks are joined. Preserve the unsent command when a failed send makes recovery useful, as in [Tokio's `SendError<T>`](../../resources/languages/rust/tokio/tokio/src/sync/mpsc/error.rs).
 
-- **NEVER** block the async runtime with sync I/O or CPU work
-- **AVOID** holding `std::sync::Mutex` guards across `.await`
-- **NEVER** forget timeouts on network operations
-- **DO** use async only for I/O-bound operations
-- **DO** use `spawn_blocking` for CPU-bound or blocking work
-- **DO** use `JoinSet` for structured concurrency
-- **DO** document cancellation safety
-- **DO** prefer `async fn` over manual futures
-- **DO** use native `async fn` in traits (1.75+); keep `#[async_trait]` only for `dyn`
-- **DO** use async closures (`async ‖ {}`, 1.85+) when you need to capture references across awaits
-- **DO** prefer the actor pattern over `Mutex` for sequential shared state
-- **DON'T** use raw `spawn` without tracking tasks
-- **DON'T** carry `#[async_trait]` forward in 2024-edition code unless you need `dyn`
+## Framework-Specific APIs
 
----
+Check a framework's current trait bounds and migration guide before adapting handlers or extractors. Axum 0.8 removed `async-trait` from extractor implementations; ordinary async handlers predate that change. It did not make application-defined native async database traits dyn-compatible. See [Axum's 0.8 announcement](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0).
 
 ## Related
 
-- [errors.md](errors.md) - Error handling in async contexts
-- [traits.md](traits.md) - Async traits
-
-## References
-
-- [Tokio Tutorial](https://tokio.rs/tokio/tutorial)
-- [Async Book](https://rust-lang.github.io/async-book/)
-- [Tokio Select](https://tokio.rs/tokio/tutorial/select)
-- [Async closures — Rust 1.85 release notes](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
-- [Announcing Axum 0.8](https://tokio.rs/blog/2025-01-01-announcing-axum-0-8-0) - No more `#[async_trait]` for handlers
-- [Actors with Tokio](https://ryhl.io/blog/actors-with-tokio/) - Canonical actor pattern write-up
-- [trait-variant crate](https://docs.rs/trait-variant/) - Native + `dyn` bridging
+- [Ownership](ownership.md): ownership transfer, scoped threads, and `'static`
+- [Traits](traits.md): native and boxed futures
+- [Errors](errors.md): recovery contracts
+- [Tokio source reading path](resources.md)

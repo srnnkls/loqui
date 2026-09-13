@@ -4,465 +4,245 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Types
 
-Domain modeling, type safety, newtypes, builders, and compile-time invariants.
+Use types to express distinctions and preserve invariants that matter to the operation. Keep the representation understandable; a wrapper or extra enum is useful when it prevents a realistic mistake.
 
-## Core Guidelines
+## Newtypes and Representation
 
-### Start with Types
-
-**Model your domain with types FIRST. Types are the design.**
+A newtype distinguishes values that would otherwise share a primitive type. A type alias gives an existing type another name without creating that distinction:
 
 ```rust
-// ✓ CORRECT: Domain types express the model
-pub struct Order {
-    id: OrderId,
-    customer: CustomerId,
-    items: Vec<LineItem>,
-    status: OrderStatus,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct UserId(u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct OrderId(u64);
+
+fn order_key(user: UserId, order: OrderId) -> (u64, u64) {
+    (user.0, order.0)
 }
 
-pub enum OrderStatus {
-    Draft,
-    Submitted { at: DateTime<Utc> },
-    Fulfilled { at: DateTime<Utc>, tracking: TrackingId },
-    Cancelled { reason: String },
-}
-
-// ✘ WRONG: Stringly-typed, no compile-time guarantees
-pub struct BadOrder {
-    id: String,
-    customer_id: String,
-    status: String,  // "draft", "submitted", ???
-    tracking: Option<String>,
-}
+assert_eq!(order_key(UserId(1), OrderId(2)), (1, 2));
 ```
 
-Design types before writing logic. The type system catches errors at compile time.
-
-### Newtype for Type Safety
-
-**Wrap primitives to distinguish semantically different values.**
+Newtype abstraction can optimize away, but default Rust representation does not promise the same ABI as the wrapped type. When that guarantee is required, use `#[repr(transparent)]` with a permitted field layout and a compatible inner type:
 
 ```rust
-// ✓ CORRECT: Newtypes prevent mixing up IDs
-pub struct UserId(pub u64);
-pub struct OrderId(pub u64);
-pub struct ProductId(pub u64);
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct WireId(pub u32);
+```
 
-fn get_order(user: UserId, order: OrderId) -> Option<Order> {
-    // Compiler prevents: get_order(order_id, user_id)
-}
+`repr(transparent)` is a layout contract, not validation of the value or an endianness conversion. Keep fields private when construction must enforce an invariant. See [type layout](https://doc.rust-lang.org/reference/type-layout.html#the-transparent-representation).
 
-// ✓ CORRECT: Newtypes for units
-pub struct Miles(pub f64);
-pub struct Kilometers(pub f64);
+## Preserve Invariants at Boundaries
 
-impl Miles {
-    pub fn to_kilometers(self) -> Kilometers {
-        Kilometers(self.0 * 1.60934)
+Use constructors or `TryFrom` to validate input once, then preserve the invariant through every public operation. A simple, precise invariant is more useful than a toy validator claiming to implement a complex format:
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+pub struct NonEmptyString(String);
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct EmptyString;
+
+impl TryFrom<String> for NonEmptyString {
+    type Error = EmptyString;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() { Err(EmptyString) } else { Ok(Self(value)) }
     }
 }
 
-// ✘ WRONG: Type aliases don't provide safety
-type UserId = u64;
-type OrderId = u64;  // Can accidentally swap these
+impl NonEmptyString {
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+assert!(NonEmptyString::try_from(String::new()).is_err());
+assert_eq!(NonEmptyString::try_from("hello".to_owned()).unwrap().as_str(), "hello");
 ```
 
-Newtypes are zero-cost: same runtime representation as the wrapped type.
+Returning `&mut String` from this type would let callers empty it and break the invariant. Likewise, derived deserialization may bypass a constructor; arrange validation in the deserialization path when necessary.
 
-### Arguments Convey Meaning Through Types
+## Model Distinct States
 
-**Use enums instead of `bool` or `Option` for clarity.**
+Use an enum when the active state determines which data exists:
 
 ```rust
-// ✓ CORRECT: Enum arguments are self-documenting
-pub enum Visibility {
-    Public,
-    Private,
-}
-
-pub enum Compression {
-    None,
-    Gzip,
-    Zstd,
-}
-
-fn upload(data: &[u8], visibility: Visibility, compression: Compression) {
-    // Clear what each argument means
-}
-
-// ✘ WRONG: What do these booleans mean?
-fn upload_bad(data: &[u8], is_public: bool, compress: bool) {
-    // upload_bad(data, true, false) - unclear
-}
-
-// ✘ WRONG: Option obscures intent
-fn upload_worse(data: &[u8], public: Option<()>, compress: Option<()>) {
-    // What does None mean?
+enum Connection {
+    Disconnected,
+    Connecting { attempt: u32 },
+    Connected { session: String },
+    Failed { reason: String },
 }
 ```
 
-Enums make call sites readable and enable exhaustive matching.
-
-### Use Builders for Complex Construction
-
-**Builder pattern for types with many optional fields or complex setup.**
+This avoids combinations such as “connected without a session.” Nested options are sometimes meaningful: `Option<Option<T>>` can distinguish an omitted patch field, explicit removal, and replacement. If that meaning is hard to remember, name it:
 
 ```rust
-// ✓ CORRECT: Builder for complex configuration
-pub struct Client {
+enum Patch<T> {
+    Unchanged,
+    Remove,
+    Set(T),
+}
+```
+
+An in-memory nested option does not by itself guarantee that a serialization format preserves all three states. Define and test the wire representation separately.
+
+## Make Arguments Understandable
+
+Prefer enums over anonymous booleans when a call such as `upload(data, true, false)` hides distinct modes. A named builder method such as `heading(true)` is already clear: [ripgrep's printer builder](../../resources/languages/rust/ripgrep/crates/printer/src/standard.rs) uses `heading(bool)` and `stats(bool)` for straightforward switches.
+
+For combinable flags, consider the `bitflags` crate when its representation and unknown-bit handling fit the API. An ordinary enum describes alternatives, not arbitrary combinations.
+
+## Choose Builder Ownership Deliberately
+
+A consuming builder can move owned fields into its result:
+
+```rust
+use std::time::Duration;
+
+struct Client {
     endpoint: String,
     timeout: Duration,
-    retries: u32,
-    auth: Option<Auth>,
 }
 
-pub struct ClientBuilder {
+struct ClientBuilder {
     endpoint: String,
     timeout: Duration,
-    retries: u32,
-    auth: Option<Auth>,
 }
 
 impl ClientBuilder {
-    pub fn new(endpoint: impl Into<String>) -> Self {
-        Self {
-            endpoint: endpoint.into(),
-            timeout: Duration::from_secs(30),
-            retries: 3,
-            auth: None,
-        }
+    fn new(endpoint: impl Into<String>) -> Self {
+        Self { endpoint: endpoint.into(), timeout: Duration::from_secs(30) }
     }
 
-    pub fn timeout(mut self, timeout: Duration) -> Self {
+    fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    pub fn retries(mut self, retries: u32) -> Self {
-        self.retries = retries;
-        self
-    }
-
-    pub fn auth(mut self, auth: Auth) -> Self {
-        self.auth = Some(auth);
-        self
-    }
-
-    pub fn build(self) -> Client {
-        Client {
-            endpoint: self.endpoint,
-            timeout: self.timeout,
-            retries: self.retries,
-            auth: self.auth,
-        }
+    fn build(self) -> Client {
+        Client { endpoint: self.endpoint, timeout: self.timeout }
     }
 }
 
-// Usage
-let client = ClientBuilder::new("https://api.example.com")
-    .timeout(Duration::from_secs(60))
-    .auth(Auth::bearer(token))
+let client = ClientBuilder::new("https://example.com")
+    .timeout(Duration::from_secs(5))
     .build();
+assert_eq!(client.timeout, Duration::from_secs(5));
 ```
 
-Consider `#[derive(Builder)]` from the `derive_builder` crate for boilerplate reduction.
+A reusable builder can instead configure through `&mut self` and build through `&self`, cloning fields that the result must own. [ripgrep's searcher builder](../../resources/languages/rust/ripgrep/crates/searcher/src/searcher/mod.rs) demonstrates this contract. Use `Result` from `build` when configuration can fail, and retain a simpler constructor when a builder adds no value.
 
-### Implement Common Traits Eagerly
+## Derive Meaningful Traits
 
-**Derive standard traits for public types.**
+| Trait                       | Suitable contract                                                  |
+| --------------------------- | ------------------------------------------------------------------ |
+| `Debug`                     | Useful diagnostics, with sensitive fields redacted if needed       |
+| `Clone`                     | Independent duplication or shared-handle duplication is meaningful |
+| `Copy`                      | Implicit duplication is part of the public contract                |
+| `PartialEq` / `Eq`          | A coherent equality relation exists                                |
+| `Hash`                      | Hashing agrees with equality                                       |
+| `Default`                   | One value is a sensible default                                    |
+| `Serialize` / `Deserialize` | A deliberate data representation exists                            |
 
-```rust
-// ✓ CORRECT: Derive appropriate traits
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UserId(String);
+Adding a public `Copy` implementation constrains future evolution even when today's fields are small. Derives do not replace review of semantic equality, confidentiality, or validation.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Point {
-    x: i32,
-    y: i32,
-}
+## Conditional Ownership with `Cow`
 
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct Config {
-    name: String,
-    value: f64,
-}
-```
-
-| Trait | When to Derive |
-|-------|----------------|
-| `Debug` | Almost always (required for error messages) |
-| `Clone` | When values can be duplicated |
-| `Copy` | Small, trivial types without heap allocation |
-| `PartialEq`/`Eq` | When equality comparison makes sense |
-| `Hash` | When used as HashMap/HashSet keys |
-| `Default` | When there's a sensible default value |
-| `Serialize`/`Deserialize` | For data interchange (feature-gated) |
-
-### Use `Cow` for Flexible Ownership
-
-**`Cow<'a, T>` defers cloning until mutation is needed.**
+Use `Cow` when returning borrowed or owned data, or when mutation may require ownership. A function that only reads should usually accept `&str` instead:
 
 ```rust
 use std::borrow::Cow;
 
-// ✓ CORRECT: Return Cow to avoid allocation when possible
-fn normalize_path(path: &str) -> Cow<'_, str> {
-    if path.contains("//") {
-        Cow::Owned(path.replace("//", "/"))  // Must allocate
-    } else {
-        Cow::Borrowed(path)  // No allocation
+fn lowercase_ascii(mut text: Cow<'_, str>) -> Cow<'_, str> {
+    if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        text.to_mut().make_ascii_lowercase();
     }
+    text
 }
 
-// ✓ CORRECT: Accept Cow when caller may already own data
-fn log_message(msg: Cow<'_, str>) {
-    println!("{}", msg);
-    // Cow::Owned("...".to_string()) - no extra clone, caller's String reused
-    // Cow::Borrowed("...") - no allocation, just borrows
-}
-
-// ✓ CORRECT: Cow shines when mutation is conditional
-fn maybe_uppercase(s: Cow<'_, str>) -> Cow<'_, str> {
-    if s.chars().any(|c| c.is_lowercase()) {
-        Cow::Owned(s.to_uppercase())  // Clone + transform
-    } else {
-        s  // Pass through unchanged, no allocation
-    }
-}
+assert!(matches!(lowercase_ascii(Cow::Borrowed("hello")), Cow::Borrowed(_)));
+assert_eq!(lowercase_ascii(Cow::Borrowed("HELLO")), "hello");
 ```
 
-| Type | When to Use |
-|------|-------------|
-| `&str` | Read-only access, caller owns the data |
-| `String` | Function needs ownership, will store or modify |
-| `Cow<'_, str>` | May return borrowed or owned; may skip allocation |
-| `impl Into<String>` | Always needs owned, let caller decide how |
+`to_mut` clones a borrowed value when ownership is needed and reuses an already owned value. The function above defines ASCII normalization, not full Unicode case folding or filesystem path normalization.
 
-### Use `bitflags` for Flag Sets
+[Serde's deserializer interface](../../resources/languages/rust/serde/serde_core/src/de/mod.rs) distinguishes borrowed, transient, and owned input. A borrowed field can avoid allocation when the format and deserializer support it; some transformations, such as unescaping strings, require storage. See [deserializer lifetimes](https://serde.rs/lifetimes.html).
 
-**Don't use enums with bit values. Use the `bitflags` crate.**
+## Static and Local Initialization
+
+Prefer standard-library initialization types when they cover the required behavior:
+
+| Type                     | Initialization                        | Sharing                                                 |
+| ------------------------ | ------------------------------------- | ------------------------------------------------------- |
+| `std::sync::LazyLock<T>` | Closure on first access               | Synchronized, subject to its `T` and initializer bounds |
+| `std::sync::OnceLock<T>` | Explicit set or initialization method | Synchronized, subject to `T`'s bounds                   |
+| `std::cell::LazyCell<T>` | Closure on first access               | Local, not `Sync`                                       |
+| `std::cell::OnceCell<T>` | Explicit set or initialization method | Local, not `Sync`                                       |
 
 ```rust
-// ✓ CORRECT: bitflags for combinable flags
-use bitflags::bitflags;
+use std::{collections::HashMap, sync::{LazyLock, OnceLock}};
 
-bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct Permissions: u32 {
-        const READ    = 0b0001;
-        const WRITE   = 0b0010;
-        const EXECUTE = 0b0100;
-        const ADMIN   = 0b1000;
-    }
+static CODES: LazyLock<HashMap<&'static str, u16>> = LazyLock::new(|| {
+    HashMap::from([("ok", 200), ("missing", 404)])
+});
+static NAME: OnceLock<String> = OnceLock::new();
+
+fn initialize_name(name: String) -> Result<(), String> {
+    NAME.set(name)
 }
 
-fn check_access(user_perms: Permissions, required: Permissions) -> bool {
-    user_perms.contains(required)
-}
-
-let perms = Permissions::READ | Permissions::WRITE;
-
-// ✘ WRONG: Enum with manual bit manipulation
-enum BadPermissions {
-    Read = 0b0001,
-    Write = 0b0010,
-    // Can't combine these naturally
-}
+assert_eq!(CODES["ok"], 200);
+initialize_name(String::from("service")).unwrap();
+assert_eq!(initialize_name(String::from("replacement")), Err("replacement".into()));
 ```
 
-### Parse Don't Validate
+Handle initialization failures and repeated sets deliberately. Do not discard an error just because initialization occurs once in the intended path. Compare fallible initialization, poisoning, and compiler support before replacing `once_cell` or `lazy_static`; see [modernization](modernization.md#standard-library-alternatives).
 
-**Convert at boundaries to validated types. Core logic uses guaranteed-valid types.**
+## Collection Helpers
 
-```rust
-// ✓ CORRECT: Parse into validated type
-pub struct Email(String);
-
-impl Email {
-    pub fn parse(s: &str) -> Result<Self, EmailError> {
-        if s.contains('@') && s.len() > 3 {
-            Ok(Email(s.to_string()))
-        } else {
-            Err(EmailError::Invalid)
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-// Core logic uses Email, not String
-fn send_notification(to: &Email, message: &str) {
-    // No validation needed here - Email is guaranteed valid
-}
-
-// ✘ WRONG: Validate repeatedly
-fn send_notification_bad(to: &str, message: &str) -> Result<(), Error> {
-    if !to.contains('@') {
-        return Err(Error::InvalidEmail);  // Validated everywhere
-    }
-    // ...
-}
-```
-
-Parse at system boundaries (API handlers, CLI, config loading). Propagate validated types internally.
-
-### Static and Thread-Local Initialization (Rust 1.80+)
-
-**Stdlib `LazyLock` / `OnceLock` / `LazyCell` replaced `lazy_static` and `once_cell`.** Drop those crates from new code.
+Use collection methods when their behavior matches the operation:
 
 ```rust
-// ✓ CORRECT: stdlib LazyLock for lazy, thread-safe statics (Rust 1.80+)
-use std::sync::LazyLock;
+use std::collections::HashMap;
 
-static CONFIG: LazyLock<Config> = LazyLock::new(|| Config::load().unwrap());
+let mut values = vec![1, 2, 3, 4];
+// Vec::pop_if (1.86): predicate gets &mut T and can mutate the last element.
+assert_eq!(values.pop_if(|value| *value > 3), Some(4));
 
-fn handler() {
-    let cfg = &*CONFIG;   // lazily initialized on first access
-    // ...
-}
+// Vec::extract_if (1.87): retained elements keep their order.
+let evens: Vec<_> = values.extract_if(.., |value| *value % 2 == 0).collect();
+assert_eq!(evens, [2]);
+assert_eq!(values, [1, 3]);
 
-// ✓ CORRECT: OnceLock for write-once, read-many values (Rust 1.70+)
-use std::sync::OnceLock;
+// HashMap::extract_if (1.88): map iteration order is unspecified.
+let mut counts = HashMap::from([("a", 1), ("b", 2)]);
+let removed: Vec<_> = counts.extract_if(|_, value| *value == 1).collect();
+assert_eq!(removed, [("a", 1)]);
 
-static LOGGER: OnceLock<Logger> = OnceLock::new();
+// array_windows (1.94): borrowed fixed-size windows, not owned arrays.
+let values = [1, 2, 3, 4];
+let windows: Vec<&[i32; 3]> = values.array_windows::<3>().collect();
+assert_eq!(windows, [&[1, 2, 3], &[2, 3, 4]]);
 
-pub fn init_logger(l: Logger) {
-    LOGGER.set(l).ok();   // returns Err if already set
-}
-
-// ✓ CORRECT: LazyCell for single-threaded / thread-local init
-use std::cell::LazyCell;
-
-thread_local! {
-    static CACHE: LazyCell<HashMap<String, u32>> = LazyCell::new(HashMap::new);
-}
-
-// ✘ OBSOLETE: replace with LazyLock
-// use lazy_static::lazy_static;
-// lazy_static! { static ref CONFIG: Config = Config::load(); }
-
-// ✘ OBSOLETE: replace with LazyLock / OnceLock
-// use once_cell::sync::Lazy;
-// static CONFIG: Lazy<Config> = Lazy::new(Config::load);
-```
-
-| Variant | Thread-safe | Init | Use for |
-|---|---|---|---|
-| `LazyLock<T>` | yes | closure, on first access | Lazy thread-safe globals |
-| `OnceLock<T>` | yes | explicit `.set(…)` | Write-once configuration |
-| `LazyCell<T>` | no | closure, on first access | `thread_local!` caches |
-| `OnceCell<T>` | no | explicit `.set(…)` | Single-threaded lazy init |
-
-### Const Generic Argument Inference (Rust 1.89+)
-
-**Use `<_>` for const generic arguments the compiler can infer** — symmetric with type inference.
-
-```rust
-fn identity<const N: usize>(arr: [i32; N]) -> [i32; N] { arr }
-
-// ✓ Rust 1.89+: compiler infers N
-let r = identity::<_>([1, 2, 3]);
-
-// ✘ Pre-1.89: had to spell it out
-let r = identity::<3>([1, 2, 3]);
-```
-
-### Collection Helpers
-
-Several recent stdlib additions replace manual iteration:
-
-```rust
-// Vec::pop_if (Rust 1.86+): conditional pop
-let mut v = vec![1, 2, 3, 4];
-let popped = v.pop_if(|&x| x > 3);
-// popped = Some(4), v = [1, 2, 3]
-
-// Vec::extract_if (Rust 1.87+): drain-by-predicate, returns iterator
-let mut v = vec![1, 2, 3, 4, 5];
-let evens: Vec<i32> = v.extract_if(.., |x| *x % 2 == 0).collect();
-// v = [1, 3, 5], evens = [2, 4]
-
-// HashMap::extract_if (Rust 1.87+): same pattern on maps
-let mut m: HashMap<&str, i32> = [("a", 1), ("b", 2)].into();
-let drained: Vec<_> = m.extract_if(|_, v| *v == 1).collect();
-
-// Result::flatten (Rust 1.89+)
-let nested: Result<Result<i32, &str>, &str> = Ok(Ok(42));
+// Result::flatten (1.89): collapses equal error types.
+let nested: Result<Result<u32, &str>, &str> = Ok(Ok(42));
 assert_eq!(nested.flatten(), Ok(42));
-
-// slice::array_windows::<N>() (Rust 1.94+): overlapping const-size windows
-let data = [1u8, 2, 3, 4, 5];
-for w in data.array_windows::<3>() {
-    let _: &[u8; 3] = w;   // typed as [T; N], not &[T]
-}
 ```
 
-### Make Illegal States Unrepresentable
+Both extraction iterators are lazy: dropping early retains unvisited entries. `array_windows::<0>()` panics; choose a nonzero window size. See [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html), [`HashMap`](https://doc.rust-lang.org/std/collections/struct.HashMap.html), and [slice methods](https://doc.rust-lang.org/std/primitive.slice.html#method.array_windows).
 
-**Use enums to eliminate invalid state combinations.**
+Const arguments can be inferred with `_` where enough type information exists (1.89); omitting a turbofish can be simpler still:
 
 ```rust
-// ✓ CORRECT: State machine as enum
-pub enum Connection {
-    Disconnected,
-    Connecting { attempt: u32 },
-    Connected { session: Session },
-    Failed { error: Error, retries: u32 },
-}
-
-// Each variant has exactly the fields it needs
-// Can't have a session while disconnected
-// Can't have retries without an error
-
-// ✘ WRONG: All fields optional, many invalid combinations
-pub struct BadConnection {
-    is_connected: bool,
-    is_connecting: bool,
-    session: Option<Session>,
-    error: Option<Error>,
-    attempt: Option<u32>,
-    retries: Option<u32>,
-}
-// is_connected=true, is_connecting=true, session=None ???
+fn identity<const N: usize>(array: [u8; N]) -> [u8; N] { array }
+assert_eq!(identity::<_>([1, 2, 3]), [1, 2, 3]);
 ```
-
-If a combination of values is invalid, make it unrepresentable in the type system.
-
-## Summary
-
-- **NEVER** use `String` or primitives for domain identifiers (use newtypes)
-- **NEVER** use `bool` parameters for modes or options (use enums)
-- **NEVER** model state machines with `Option` soup (use enums)
-- **DO** design types before implementing logic
-- **DO** use newtypes for type safety (IDs, units, validated strings)
-- **DO** use enums for arguments with distinct modes
-- **DO** use builders for complex construction
-- **DO** derive common traits (`Debug`, `Clone`, `PartialEq`, etc.)
-- **DO** use `bitflags` for combinable flags
-- **DO** parse at boundaries, use validated types internally
-- **DO** use stdlib `LazyLock` / `OnceLock` / `LazyCell` — never `lazy_static` / `once_cell` in new code
-- **DO** use `<_>` for const generic inference (1.89+)
-- **DO** prefer `Vec::pop_if` / `extract_if` / `array_windows::<N>()` over manual loops
-
----
 
 ## Related
 
-- [ownership.md](ownership.md) - How types express ownership semantics
-- [traits.md](traits.md) - Implementing and deriving traits
-- [errors.md](errors.md) - Error types for parsing failures
-- [modernization.md](modernization.md) - Stdlib replacements for `lazy_static` / `once_cell`
-
-## References
-
-- [Rust API Guidelines: Type Safety](https://rust-lang.github.io/api-guidelines/type-safety.html)
-- [Rust Design Patterns: Newtype](https://rust-unofficial.github.io/patterns/patterns/behavioural/newtype.html)
-- [Rust Design Patterns: Builder](https://rust-unofficial.github.io/patterns/patterns/creational/builder.html)
-- [Parse, don't validate (Haskell, concepts apply)](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/)
-- [`std::sync::LazyLock`](https://doc.rust-lang.org/std/sync/struct.LazyLock.html) - Rust 1.80+
-- [`std::sync::OnceLock`](https://doc.rust-lang.org/std/sync/struct.OnceLock.html) - Rust 1.70+
+- [Ownership](ownership.md): borrowed views, moves, and cloning
+- [Traits](traits.md): conversions and associated types
+- [API Guidelines: type safety](../../resources/languages/rust/api-guidelines/src/type-safety.md)
+- [Source catalog](resources.md): redb's typed tables and Serde's borrowed data
