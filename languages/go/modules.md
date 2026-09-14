@@ -1,392 +1,104 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
-# Go Modules
+# Go Modules and Packages
 
-Package structure, organization, and public API design.
+A package is the unit of compilation, import, and unexported-name visibility. A module groups packages and records dependency and Go-version requirements. Keep these boundaries separate from filenames and layout conventions.
 
-## Core Commands
+## Layout and names
 
-### Standard Go Project Layout
+Start with a flat package or module when that fits. `cmd/` is a common convention for several executables, and `internal/` has an enforced import rule. `pkg/` is optional and confers no special visibility. There is no universal Go-team-mandated repository tree.
 
-**Note:** There is no Go-team-endorsed layout. The widely-cited `golang-standards/project-layout` is community-maintained and the Go team has explicitly stated it is **not** an official standard. Treat it as one reasonable option, not canonical. For small projects, a flat layout (code at the module root) is idiomatic.
-
-**For applications (cmd + internal):**
-
-```
-project-root/
-├── cmd/
-│   └── myapp/
-│       └── main.go           # Application entry point
-├── internal/
-│   ├── github/               # Domain package
-│   │   ├── client.go
-│   │   ├── types.go
-│   │   └── auth.go
-│   ├── templates/            # Another domain package
-│   │   └── templates.go
-│   └── ui/                   # Presentation layer
-│       └── table.go
-├── go.mod
-├── go.sum
-└── README.md
+```text
+example.com/project/
+    go.mod
+    go.sum
+    client.go
+    client_test.go
+    internal/
+        protocol/
+            decode.go
+    cmd/
+        project/
+            main.go
 ```
 
-**For libraries (pkg + internal):**
+Use short lowercase package names that describe their purpose and read well at a call site. Avoid stuttering and vague collections of unrelated helpers. Singular names are common, but meaningful plural names and compounds are normal too. Split by cohesive responsibility, invariants, or dependency direction; neither a strict layer rule nor an arbitrary file-size threshold determines every boundary.
 
-```
-project-root/
-├── pkg/
-│   └── mylib/                # Public API
-│       ├── client.go
-│       └── types.go
-├── internal/                 # Private implementation
-│   └── parser/
-│       └── parser.go
-├── go.mod
-└── go.sum
+## Visibility and dependencies
+
+An exported identifier begins with an uppercase Unicode letter and is declared in an exportable context such as package scope, a field, or a method. Unexported package identifiers are accessible across the source files in that package. One source file does not import another source file.
+
+Use package-level dependency diagrams:
+
+```text
+cmd/project  -> client
+client       -> internal/protocol
 ```
 
-**Key conventions:**
-- `cmd/`: Application entry points (main packages)
-- `internal/`: Private packages (Go enforces this - can't be imported outside module)
-- `pkg/`: Public library code (optional - root works too for simple libs)
+`types.go` and `client.go` can refer to each other's package declarations directly. Moving them between files does not break a package import cycle. Resolve cycles by changing the package boundary, extracting a cohesive lower-level dependency, or depending on a consumer-defined interface.
 
-### Feature-Based Package Organization
+Document the public package contract. Use an internal package when implementation details need a narrower import boundary, and preserve its own documentation when that helps maintainers.
 
-**Organize by domain feature, NOT by technical layer.**
+## The internal import rule
 
-```go
-// ✓ CORRECT: Feature-based
-internal/
-├── github/                   # GitHub domain
-│   ├── client.go            # Client implementation
-│   ├── types.go             # Domain types (PRRef, Review, Comment)
-│   ├── auth.go              # Authentication logic
-│   └── graphql.go           # GraphQL queries
-├── templates/                # Template domain
-│   └── templates.go         # Template registry and logic
-└── ui/                       # UI domain
-    └── table.go              # Table rendering
+An `internal` directory restricts imports to the tree rooted at its parent. In module mode, the rule is checked using import paths; it is not simply “inside the same module.” The Go command enforces this rule.
 
-// ✘ WRONG: Layer-based organization
-internal/
-├── models/                   # All types mixed together
-│   ├── prref.go
-│   ├── review.go
-│   └── template.go
-├── services/                 # All business logic mixed
-│   ├── github_service.go
-│   └── template_service.go
-└── utils/                    # Grab bag
-    ├── auth.go
-    └── table.go
+| Importer                                        | Imported package                              | Allowed?                                                                        |
+| ----------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------- |
+| `example.com/project/client`                    | `example.com/project/internal/protocol`       | Yes                                                                             |
+| `example.com/other/client`                      | `example.com/project/internal/protocol`       | No                                                                              |
+| `example.com/project/sibling`                   | `example.com/project/feature/internal/detail` | No, despite sharing a module                                                    |
+| `example.com/project/feature/client`            | `example.com/project/feature/internal/detail` | Yes                                                                             |
+| Separate module `example.com/project/extension` | `example.com/project/internal/protocol`       | Yes, when its dependency resolves; the import path is within the permitted tree |
+
+Use nested internal directories when the intended boundary is narrower than the module. This is an import restriction, not a security boundary against someone who can copy or edit the source. [Internal directories](https://pkg.go.dev/cmd/go@go1.27.1#hdr-Internal_Directories)
+
+## Go versions and tools
+
+The module's `go` directive states its minimum required Go version and controls language semantics. A `toolchain` directive suggests a toolchain when the module is the main module; it does not replace the compatibility contract for consumers. Build constraints may affect the version applicable to a particular file.
+
+```text
+module example.com/project
+
+go 1.27.0
 ```
 
-### Package Naming
+Use the current supported patch toolchain for development while retaining an older minimum only when the project actually supports and checks it. Go 1.27 adds the `stdversion` vet check to the default checks run by `go test`, helping detect standard-library symbols newer than the file's declared baseline. Updating the compiler alone is not a reason to raise every library's `go` directive. [Go toolchains](https://go.dev/doc/toolchain)
 
-**Packages are lowercase, single word, no underscores.**
+For module-managed tools on Go 1.24+, use tool directives. For example, this command adds a tool requirement and its dependency version; inspect and commit the resulting `go.mod` and `go.sum` changes:
 
-```go
-// ✓ CORRECT
-package github
-package templates
-package ui
-
-// ✘ WRONG
-package GitHub          // Capital letters
-package github_client   // Underscores
-package githubclient    // Confusing compound (split into packages)
+```sh
+go get -tool golang.org/x/tools/cmd/stringer@latest
+go tool stringer -help
 ```
 
-**Package names should be:**
-- Short, clear, evocative
-- Singular (not plural): `template`, not `templates` (exception: when package contains collection)
-- Not overly generic: avoid `util`, `common`, `base`
+Use an explicit selected version instead of `@latest` when reproducibility of the selection matters; subsequent invocations use the module's selected version. Tool dependencies participate in module dependency selection. Choose a tool release compatible with the project's baseline and account for dependency upgrades it requires.
 
-### Public vs Private (Exported vs Unexported)
+After registering all tools and verifying the workflow, remove obsolete `tools.go` imports and their build tags. Go 1.27.1's `go fix` suite does not perform that module-file migration for you. Global editor tools or tools intentionally isolated from the module may need a different installation strategy. [Tool directives](https://go.dev/ref/mod#go-mod-file-tool)
 
-**Capitalization determines visibility:**
+## Multi-module workspaces
 
-```go
-// ✓ Public API
-type Client struct { ... }           // Exported type
-func NewClient() *Client { ... }     // Exported function
-func (c *Client) GetReview() { ... } // Exported method
+Use `go.work` to develop related modules together without adding local filesystem replacements to each module. A replace directive remains useful when an actual module substitution belongs to the main module's configuration.
 
-// ✓ Private implementation
-type clientImpl struct { ... }       // Unexported type
-func parseToken() string { ... }     // Unexported function
-func (c *Client) validateCache() { ... } // Unexported method
-
-// ✓ Struct fields
-type PRRef struct {
-    Owner  string  // Exported: can be accessed outside package
-    Repo   string  // Exported
-    Number int     // Exported
-}
-
-type client struct {
-    token string  // Unexported: private to package
-    cache map[string]*Review
-}
-```
-
-### File Organization Within Package
-
-**Keep related code together. Split at ~500 lines or by logical concern.**
-
-```go
-// ✓ CORRECT: Related code in same file
-// github/types.go
-type PRRef struct { ... }
-type Review struct { ... }
-type Comment struct { ... }
-
-func ParsePRRef(ref string) (*PRRef, error) { ... }
-
-// github/client.go
-type Client struct { ... }
-func NewClient() *Client { ... }
-func (c *Client) GetReview() (*Review, error) { ... }
-
-// github/auth.go
-func GetGitHubToken() (string, error) { ... }
-```
-
-**When to split:**
-- File exceeds ~500 lines
-- Distinct concerns within package (auth, parsing, rendering)
-- Multiple implementations of same interface
-
-**DON'T split prematurely** (< 100 lines per file is too fragmented).
-
-### Package Documentation
-
-**Every package needs a doc comment on the package clause.**
-
-```go
-// ✓ CORRECT: Package documentation
-// Package github provides a unified client for GitHub REST and GraphQL APIs.
-//
-// The Client interface abstracts the dual-API surface, allowing commands
-// to work with pending reviews without knowing whether to use REST or GraphQL.
-//
-// Example usage:
-//
-//     client, err := github.NewClient(token)
-//     if err != nil {
-//         log.Fatal(err)
-//     }
-//     review, err := client.GetPendingReview(ctx, prRef)
-package github
-```
-
-**Place in:**
-- `doc.go` for complex packages with extensive documentation
-- Any `.go` file in simple packages (conventionally the main file)
-
-### Internal Packages
-
-**Use `internal/` to enforce package privacy.**
-
-```go
-// Enforced by Go compiler:
-module github.com/user/myapp
-
-// ✓ Can import
-github.com/user/myapp/internal/github        // Within same module
-
-// ✘ CANNOT import (compiler error)
-github.com/other/app imports github.com/user/myapp/internal/github
-```
-
-**When to use internal/:**
-- Implementation details you want to hide
-- Packages that shouldn't be imported by external code
-- Experimental APIs not ready for public use
-
-### Dependencies Flow Toward Domain Core
-
-**Inner packages have fewer dependencies. Outer packages depend on inner.**
-
-```go
-// ✓ CORRECT: Dependencies flow inward
-internal/github/
-    types.go          // No internal dependencies (just stdlib)
-    client.go         // Imports types.go
-    auth.go           // Imports types.go
-
-cmd/drafts/
-    main.go           // Imports internal/github, internal/templates
-    commands.go       // Imports internal/github, internal/ui
-
-// ✘ WRONG: Circular dependencies
-// github/client.go imports ui/table.go
-// ui/table.go imports github/types.go
-// Creates import cycle
-```
-
-**Prevent cycles:**
-- Extract shared types to lower-level package
-- Use interfaces to invert dependencies
-- Rethink package boundaries
-
-### Main Package
-
-**Every executable needs exactly one `main` package with `main()` function.**
-
-```go
-// ✓ CORRECT: cmd/drafts/main.go
-package main
-
-import (
-    "github.com/spf13/cobra"
-    "github.com/srnnkls/drafts/internal/github"
-)
-
-func main() {
-    rootCmd := &cobra.Command{
-        Use:   "drafts",
-        Short: "Manage GitHub PR review drafts",
-    }
-
-    rootCmd.AddCommand(listCmd())
-    rootCmd.AddCommand(addCmd())
-
-    if err := rootCmd.Execute(); err != nil {
-        os.Exit(1)
-    }
-}
-```
-
-**Keep main.go thin:**
-- Parse flags
-- Initialize dependencies
-- Call into internal packages
-- Handle top-level errors
-
-### Tool Dependencies (Go 1.24+)
-
-**Use `go.mod` tool directives, not `tools.go` blank imports.**
-
-Before Go 1.24, tracking dev tools (linters, codegen) required a `tools.go` file with blank imports and a build tag. Go 1.24 replaced that with first-class `tool` directives in `go.mod`.
-
-```
-// ✓ CORRECT: Go 1.24+ go.mod
-module github.com/user/myapp
-
-go 1.26
-
-tool (
-    golang.org/x/tools/cmd/stringer
-    github.com/golangci/golangci-lint/cmd/golangci-lint
-)
-
-require (
-    // ...
-)
-```
-
-Run tools with `go tool stringer ...` — no separate `go install` step needed, version is pinned by the module.
-
-```go
-// ✘ WRONG: legacy tools.go pattern (pre-1.24)
-//go:build tools
-
-package main
-
-import (
-    _ "golang.org/x/tools/cmd/stringer"
-)
-```
-
-Delete `tools.go` when you upgrade — `go fix` can migrate for you.
-
-### Workspaces (go.work)
-
-**Use `go.work` for multi-module development, not `replace` directives.**
-
-When working across multiple modules locally (e.g., a library and its consumer), a workspace file lets you develop without editing each module's `go.mod`.
-
-```
-// ✓ go.work at repo root
-go 1.26
+```text
+go 1.27.0
 
 use (
     ./server
     ./shared
-    ./cli
 )
 ```
 
-- `go.work` is typically gitignored; don't commit it (it describes local development layout, not module structure).
-- Use `go work sync` to propagate require versions.
-- For a single-module repo, don't bother — workspaces are only useful when editing 2+ modules together.
+Usually keep a personal workspace file uncommitted. A repository whose modules are developed as a coordinated unit can intentionally commit it. Test individually released modules with `GOWORK=off` as well, so workspace-selected dependencies do not hide problems consumers will encounter.
 
-### Avoid Utils/Common Packages
+`go work sync` can update member modules' dependency requirements using workspace-selected versions. Review those edits before committing. `go.work.sum` records additional workspace checksums; it does not replace member modules' `go.sum` files. [Workspace guidance](https://go.dev/ref/mod#workspaces)
 
-**"Utils" and "common" are code smells. Use specific names.**
+## Executable boundaries
 
-```go
-// ✘ WRONG: Vague package names
-internal/utils/
-    strings.go
-    time.go
-    http.go
+Keep process setup and exit policy in the executable. A small `main` can call an error-returning `run`, let its defers complete, then select an exit status. Lower-level packages should normally return errors instead of calling `os.Exit` or `log.Fatal`.
 
-internal/common/
-    types.go
-    errors.go
+Document environment, configuration, and lifecycle requirements near the executable's entry point. Prefer explicit initialization over hidden package-level I/O when configuration and error recovery matter.
 
-// ✓ CORRECT: Specific package names
-internal/parsing/
-    prref.go          // PR reference parsing
-
-internal/formatting/
-    table.go          // Table formatting
-
-internal/github/
-    types.go          // GitHub-specific types
-    errors.go         // GitHub-specific errors
-```
-
----
-
-## Summary
-
-- **DO** use standard layout: `cmd/` for apps, `internal/` for private code
-- **DO** organize by feature/domain, NOT technical layer
-- **DO** keep package names lowercase, single word, no underscores
-- **DO** use capitalization for public/private (exported/unexported)
-- **DO** keep related code together in same file/package
-- **DO** split files at ~500 lines or by logical concern
-- **DO** write package documentation on package clause
-- **DO** use `internal/` to enforce privacy
-- **DO** ensure dependencies flow toward domain core
-- **DO** keep main.go thin (orchestration only)
-- **DO** use `go.mod` tool directives (Go 1.24+) instead of `tools.go` blank imports
-- **DO** use `go.work` for multi-module local development (not `replace` directives)
-- **DON'T** use "utils" or "common" packages
-- **DON'T** treat `golang-standards/project-layout` as canonical — it isn't Go-team-endorsed
-- **DON'T** organize by technical layer (models/, services/)
-- **DON'T** split prematurely (< 100 lines per file)
-- **NEVER** create circular dependencies
-
----
-
-## Related Files
-
-- **composition.md**: When to use packages vs structs
-- **quality.md**: When to split files (section dividers = split signal)
-- **errors.md**: Package-specific error types
-
-## References
-
-- [Go Package Best Practices](https://go.dev/blog/package-names) - Official
-- [Internal Packages](https://go.dev/doc/go1.4#internalpackages)
-- [Go Modules Reference](https://go.dev/ref/mod)
-- [Go 1.24 release notes — tool directives](https://go.dev/doc/go1.24#tools) - replaces tools.go
-- [Workspaces tutorial](https://go.dev/doc/tutorial/workspaces) - go.work for multi-module dev
-- [golang-standards/project-layout](https://github.com/golang-standards/project-layout) - Community repo, not Go-team-endorsed (see its own disclaimer)
+Related guidance: [composition](composition.md), [errors](errors.md), [modernization](modernization.md), and [reference sources](resources.md). See [package names](https://go.dev/blog/package-names) and [module documentation](https://go.dev/ref/mod) for the underlying conventions and commands.

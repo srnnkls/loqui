@@ -1,360 +1,145 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
 # Go Errors
 
-Error handling, error types, wrapping, and checking patterns.
+Return errors for expected operational failures. Check them before using results that are invalid on failure, and add the context a caller needs to act. Avoid logging an error at every layer while also returning it; choose a reporting boundary.
 
-## Core Commands
+## Identity and wrapping
 
-### Errors Are Values
+Use a sentinel when callers need a stable error category. Reuse the sentinel value: two calls to `errors.New` with identical messages still produce distinct errors. Use a structured error type when callers need fields or behavior.
 
-**In Go, errors are just values. Return them explicitly.**
+`errors.Is` matches through an error tree, including wrapping and custom `Is` methods. Direct comparison is appropriate only when the API intentionally promises exact identity. `errors.AsType[T]` extracts a matching error type in Go 1.26+; use `errors.As` when supporting older versions. A direct type assertion inspects only the outer error.
 
-```go
-// ✓ CORRECT: Return errors explicitly
-func GetUser(id int) (*User, error) {
-    user, err := db.Query(id)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get user: %w", err)
-    }
-    return user, nil
-}
-
-// Go has no exceptions - this is intentional
-```
-
-### Check Errors Immediately
-
-**Always check errors right after they occur.**
+Wrapping with `%w` exposes the underlying error for inspection. That becomes part of the API contract. Use `%v` when the underlying error should contribute text without exposing its type or identity; use neither merely as a reflex.
 
 ```go
-// ✓ CORRECT: Check immediately
-file, err := os.Open("file.txt")
-if err != nil {
-    return fmt.Errorf("failed to open file: %w", err)
-}
-defer file.Close()
+package example
 
-// Process file...
-
-// ✘ WRONG: Ignoring errors
-file, _ := os.Open("file.txt")
-defer file.Close()
-
-// ✘ WRONG: Deferred error checking
-file, err := os.Open("file.txt")
-// ... many lines ...
-if err != nil {  // Too far from the call
-    return err
-}
-```
-
-### Error Wrapping with %w
-
-**Use `%w` to wrap errors, preserving the original error.**
-
-```go
-// ✓ CORRECT: Wrap with context
-func ProcessFile(path string) error {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        return fmt.Errorf("failed to process %s: %w", path, err)
-    }
-    // ...
-}
-
-// Caller can check the original error
-err := ProcessFile("config.json")
-if errors.Is(err, os.ErrNotExist) {
-    // Handle missing file
-}
-
-// ✘ WRONG: Using %v loses error chain
-return fmt.Errorf("failed to process %s: %v", path, err)
-```
-
-### Sentinel Errors
-
-**Use `var` for errors that callers should check.**
-
-```go
-// ✓ CORRECT: Exported sentinel errors
-var (
-    ErrNotFound     = errors.New("not found")
-    ErrInvalidInput = errors.New("invalid input")
-    ErrUnauthorized = errors.New("unauthorized")
+import (
+	"errors"
+	"fmt"
 )
 
-func GetUser(id int) (*User, error) {
-    user, err := db.Find(id)
-    if err != nil {
-        if errors.Is(err, sql.ErrNoRows) {
-            return nil, ErrNotFound
-        }
-        return nil, fmt.Errorf("database error: %w", err)
-    }
-    return user, nil
-}
+// ErrNotFound indicates that the requested record does not exist.
+var ErrNotFound = errors.New("not found")
 
-// Caller can check
-user, err := GetUser(123)
-if errors.Is(err, ErrNotFound) {
-    // Handle not found case
-}
-```
-
-**Naming convention:** `Err` prefix for sentinel errors.
-
-### Custom Error Types
-
-**Create custom error types when errors need structured data.**
-
-```go
-// ✓ Custom error type with data
+// ValidationError identifies a field whose value was rejected.
 type ValidationError struct {
-    Field   string
-    Message string
+	Field   string
+	Message string
 }
 
 func (e *ValidationError) Error() string {
-    return fmt.Sprintf("validation failed for %s: %s", e.Field, e.Message)
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
 }
 
-func ValidateUser(user *User) error {
-    if user.Email == "" {
-        return &ValidationError{
-            Field:   "email",
-            Message: "email is required",
-        }
-    }
-    return nil
+// Classify selects the response category for this API's errors.
+func Classify(err error) string {
+	if errors.Is(err, ErrNotFound) {
+		return "missing"
+	}
+	if validation, ok := errors.AsType[*ValidationError](err); ok && validation != nil && validation.Field == "email" {
+		return "invalid email"
+	}
+	return "other"
 }
 
-// Caller can extract structured data
-err := ValidateUser(user)
-var validationErr *ValidationError
-if errors.As(err, &validationErr) {
-    fmt.Printf("Field: %s, Message: %s\n",
-        validationErr.Field, validationErr.Message)
+func ExampleClassify() {
+	err := fmt.Errorf("create user: %w", &ValidationError{Field: "email", Message: "required"})
+	fmt.Println(Classify(err))
+	// Output: invalid email
 }
 ```
 
-### Type-Safe Unwrapping with `errors.AsType[T]` (Go 1.26+)
+A switch case needs an expression; it cannot contain an `if`-style short declaration. Bind results before the switch, or use the `if` initializer above. An error interface containing a typed nil pointer is non-nil; return a plain nil interface for success, and avoid producing typed nil errors.
 
-**Go 1.26 introduced `errors.AsType[T]`, a generic replacement for the two-step `errors.As` dance.** It returns the extracted value directly instead of writing through a `**T` out-parameter.
+## Collecting failures
+
+Use `errors.Join` when the required contract is to retain multiple causes that callers can inspect. It discards nil arguments and returns nil when every argument is nil. Multiple `%w` verbs in `fmt.Errorf` can also expose several causes while adding a message.
 
 ```go
-// ✘ OLD pattern — verbose and error-prone
-var notFound *NotFoundError
-if errors.As(err, &notFound) {
-    log.Println(notFound.Resource)
+package example
+
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrEmailRequired indicates a missing email address.
+var ErrEmailRequired = errors.New("email required")
+
+// ErrAgeTooLow indicates an age below this application's minimum.
+var ErrAgeTooLow = errors.New("age below minimum")
+
+// ValidateFields returns every applicable validation error.
+func ValidateFields(email string, age int) error {
+	var errs []error
+	if email == "" {
+		errs = append(errs, ErrEmailRequired)
+	}
+	if age < 18 {
+		errs = append(errs, ErrAgeTooLow)
+	}
+	return errors.Join(errs...)
 }
 
-// ✓ Go 1.26+: single-expression, no pre-declaration
-if nf, ok := errors.AsType[*NotFoundError](err); ok {
-    log.Println(nf.Resource)
-}
-
-// Particularly clean inside switch / composite expressions:
-switch {
-case errors.Is(err, ErrNotFound):
-    // ...
-case {
-    ve, ok := errors.AsType[*ValidationError](err); ok && ve.Field == "email":
-    // handle validation on email
+func ExampleValidateFields() {
+	err := ValidateFields("", 17)
+	fmt.Println(errors.Is(err, ErrEmailRequired))
+	fmt.Println(errors.Is(err, ErrAgeTooLow))
+	// Output:
+	// true
+	// true
 }
 ```
 
-Use `errors.AsType[T]` for new code in Go 1.26+; fall back to `errors.As` when supporting older toolchains.
+Return the first error when later work should stop on failure. Collect errors when independent checks or cleanup operations should all run. Replacing an existing multi-error package can change formatting, concrete types, ordering promises, or helper methods; migrate those contracts deliberately.
 
-### errors.Is vs errors.As
+## Resource cleanup and partial progress
 
-**`errors.Is`: Check if error matches a sentinel error**
-**`errors.As`: Extract specific error type**
+Close resources according to their API. For a read-only file, ignoring a close error after successful reading can be an intentional policy. For buffered output, a flush or close failure can mean the write did not succeed. If an earlier operation already failed, choose whether to preserve that error alone or report cleanup failure as well.
 
 ```go
-// ✓ errors.Is: Check sentinel errors
-if errors.Is(err, os.ErrNotExist) {
-    // Handle file not found
-}
+package example
 
-// ✓ errors.As: Extract error type
-var validationErr *ValidationError
-if errors.As(err, &validationErr) {
-    // Access validationErr.Field, validationErr.Message
-}
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+)
 
-// ✘ WRONG: Direct comparison (breaks with wrapping)
-if err == os.ErrNotExist {  // Won't work if error is wrapped
-    // ...
-}
-
-// ✘ WRONG: Type assertion (breaks with wrapping)
-if ve, ok := err.(*ValidationError); ok {  // Won't work if wrapped
-    // ...
-}
-```
-
-### Don't Panic in Library Code
-
-**Libraries should return errors, not panic. Only panic for truly unrecoverable situations.**
-
-```go
-// ✓ CORRECT: Return error
-func ParseConfig(path string) (*Config, error) {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        return nil, fmt.Errorf("failed to read config: %w", err)
-    }
-    // ...
-    return config, nil
-}
-
-// ✘ WRONG: Panic in library code
-func ParseConfig(path string) *Config {
-    data, err := os.ReadFile(path)
-    if err != nil {
-        panic(fmt.Sprintf("failed to read config: %v", err))
-    }
-    // ...
-}
-
-// ✓ OK: Panic for programming errors (use sparingly)
-func process(data []byte) {
-    if len(data) == 0 {
-        panic("process called with empty data - this is a bug")
-    }
+// WriteFile copies r into path and reports copy or close failures.
+// A failure may leave path truncated or partially written; this is not an atomic update.
+func WriteFile(path string, r io.Reader) (err error) {
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create %q: %w", path, err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close %q: %w", path, closeErr))
+		}
+	}()
+	if _, err := io.Copy(file, r); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	return nil
 }
 ```
 
-**When panic is acceptable:**
-- `init()` functions for fatal setup errors
-- Programming errors that should never happen (assertions)
-- Application main() for unrecoverable errors (convert to `log.Fatal`)
+Successful close does not by itself promise durable storage. Applications requiring atomic replacement or persistence need the appropriate file, synchronization, and directory operations for their platform.
 
-### Error Message Convention
+Do not lose an error when adapting APIs. A scanner loop needs `Scanner.Err()` after exhaustion; a fallible iterator needs an error-returning contract. See [composition.md](composition.md). Do not discard a useful byte count merely because an `io.Reader` also returned an error: its contract permits data and an error in the same call.
 
-**Error messages: lowercase, no punctuation, provide context.**
+## Panics and recovery
 
-```go
-// ✓ CORRECT
-return fmt.Errorf("failed to parse PR reference: %w", err)
-return errors.New("no pending review found")
-return fmt.Errorf("invalid age %d: must be 18 or older", age)
+Expected conditions such as a missing file, invalid external input, or a timeout normally belong in an error return. A documented programmer precondition or deliberate `Must` API may panic. Do not treat every failed initialization as permission for a library to terminate the process.
 
-// ✘ WRONG: Capitalized, punctuation
-return fmt.Errorf("Failed to parse PR reference: %w", err)
-return errors.New("No pending review found.")
-```
+Recover only at a boundary that can preserve a meaningful contract and state. `log.Fatal` and `os.Exit` terminate the process and skip deferred calls; they are not equivalent to panic. Keep process-exit policy in the executable, after application cleanup has run.
 
-**Exception:** Error messages that will be displayed to end users can be formatted differently.
+Prefer lowercase error messages without trailing punctuation when they will be composed into other messages. Preserve proper nouns and protocol spelling. End-user presentation can use full sentences independently of internal error formatting.
 
-### Multi-Error Handling
-
-**When collecting multiple errors, use `errors.Join` (Go 1.20+). Never reach for `hashicorp/go-multierror` — stdlib replaced it.**
-
-```go
-// ✓ Simple case: return first error (fail-fast)
-func ValidateFields(user *User) error {
-    if user.Email == "" {
-        return errors.New("email required")
-    }
-    if user.Age < 18 {
-        return errors.New("must be 18 or older")
-    }
-    return nil
-}
-
-// ✓ Collect all errors with errors.Join (Go 1.20+)
-func ValidateAllFields(user *User) error {
-    var errs []error
-
-    if user.Email == "" {
-        errs = append(errs, errors.New("email required"))
-    }
-    if user.Age < 18 {
-        errs = append(errs, errors.New("must be 18 or older"))
-    }
-
-    return errors.Join(errs...)  // returns nil if errs is empty
-}
-
-// errors.Is and errors.As walk the Join tree automatically:
-err := ValidateAllFields(user)
-if errors.Is(err, ErrEmailRequired) {
-    // matches even when joined with other errors
-}
-```
-
-**Multi-wrap with `fmt.Errorf`** (Go 1.20+): `%w` can appear multiple times in a single format string.
-
-```go
-// ✓ Wrap two causes in one error
-return fmt.Errorf("upload failed: %w; cleanup failed: %w", uploadErr, cleanupErr)
-```
-
-### Don't Ignore Errors in Defer
-
-**If a deferred function returns an error, handle it.**
-
-```go
-// ✓ CORRECT: Handle close error
-func ProcessFile(path string) (err error) {
-    file, err := os.Open(path)
-    if err != nil {
-        return fmt.Errorf("failed to open: %w", err)
-    }
-    defer func() {
-        if closeErr := file.Close(); closeErr != nil && err == nil {
-            err = fmt.Errorf("failed to close: %w", closeErr)
-        }
-    }()
-
-    // Process file...
-    return nil
-}
-
-// ✘ WRONG: Ignoring close error
-defer file.Close()  // Error ignored
-```
-
----
-
-## Summary
-
-- **DO** return errors explicitly (no exceptions in Go)
-- **DO** check errors immediately after they occur
-- **DO** wrap errors with `fmt.Errorf("context: %w", err)`
-- **DO** use `var ErrName = errors.New("message")` for sentinel errors
-- **DO** create custom error types when errors need structured data
-- **DO** use `errors.Is` to check sentinel errors
-- **DO** use `errors.As` — or `errors.AsType[T]` (Go 1.26+) for a cleaner single-expression form — to extract error types
-- **DO** use `errors.Join` (Go 1.20+) for multi-error collection — never `hashicorp/go-multierror`
-- **DO** use multiple `%w` verbs in `fmt.Errorf` when wrapping more than one cause
-- **DO** start error messages lowercase, no punctuation
-- **DO** handle errors from deferred Close() calls
-- **DON'T** ignore errors (no `_ = foo()`)
-- **DON'T** use `%v` when wrapping errors (use `%w`)
-- **DON'T** compare errors directly with `==` (use `errors.Is`)
-- **DON'T** use type assertions on errors (use `errors.As`)
-- **NEVER** panic in library code (return errors)
-- **NEVER** defer error checking (check immediately)
-
----
-
-## Related Files
-
-- **quality.md**: Error message conventions
-- **composition.md**: When to create custom error types
-
-## References
-
-- [Error Handling in Go](https://go.dev/blog/error-handling-and-go)
-- [Working with Errors in Go 1.13](https://go.dev/blog/go1.13-errors)
-- [Go 1.20 release notes — errors.Join](https://go.dev/doc/go1.20#errors) - multi-error stdlib
-- [Go 1.26 release notes — errors.AsType](https://go.dev/doc/go1.26) - generic type-safe unwrapping
-- [errors.Join documentation](https://pkg.go.dev/errors#Join)
-- [fmt.Errorf — multiple %w verbs](https://pkg.go.dev/fmt#Errorf)
-- [Don't just check errors, handle them gracefully](https://dave.cheney.net/2016/04/27/dont-just-check-errors-handle-them-gracefully)
+Related guidance: [testing](test.md), [concurrency and Once panic behavior](concurrency.md), and [reference sources](resources.md). The [`errors` package](https://pkg.go.dev/errors@go1.27.1) and [Go error-wrapping guidance](https://go.dev/blog/go1.13-errors) define inspection and abstraction behavior.

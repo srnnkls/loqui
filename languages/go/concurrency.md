@@ -1,303 +1,149 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
 # Go Concurrency
 
-Goroutines, channels, context, synchronization, and deterministic testing.
+Start with an operation's lifetime and invariants. Prefer a synchronous API when it lets the caller choose concurrency. Use goroutines for work that benefits from overlapping execution, and bound concurrency when resource use can grow with input size.
 
----
+## Goroutine lifetimes
 
-## Core Guidelines
+For background work, identify its owner, termination condition, and any required join. Cancellation is useful when a caller must stop work early; a bounded computation can simply return. A goroutine without a cancel function is not automatically a leak.
 
-### Goroutines Only for Concurrent Work
-
-**A goroutine is not a speed-up. It's a structural choice that says: this work can proceed independently.**
+`sync.WaitGroup` joins work but does not propagate errors or cancel it. Since Go 1.25, `WaitGroup.Go` starts a function and tracks its completion. Its callback must not panic. When the group is empty, start work before calling `Wait`; do not copy a WaitGroup after first use.
 
 ```go
-// ✓ CORRECT: genuine concurrency — these I/O calls are independent
-func fetchAll(ctx context.Context, urls []string) ([]Response, error) {
-    g, ctx := errgroup.WithContext(ctx)
-    results := make([]Response, len(urls))
-    for i, u := range urls {
-        g.Go(func() error {
-            r, err := fetch(ctx, u)
-            if err != nil {
-                return err
-            }
-            results[i] = r
-            return nil
-        })
-    }
-    if err := g.Wait(); err != nil {
-        return nil, err
-    }
-    return results, nil
-}
+package example
 
-// ✘ WRONG: CPU-bound work spread over a goroutine-per-item with no bound
-for _, x := range items {
-    go compute(x)   // leak risk, no ordering, no error propagation
-}
-```
-
-### Always Scope Goroutines — No Fire-and-Forget
-
-**Every goroutine needs an answer to two questions: who waits for it, and who cancels it?** If you can't answer both, you have a leak.
-
-```go
-// ✓ CORRECT: ctx cancels, WaitGroup/errgroup waits
-var wg sync.WaitGroup
-wg.Add(1)
-go func() {
-    defer wg.Done()
-    pollUntil(ctx)
-}()
-// ... eventually:
-cancel()
-wg.Wait()
-
-// ✘ WRONG: no cancellation path, no wait — ghost goroutine
-go func() {
-    for {
-        time.Sleep(time.Second)
-        doThing()
-    }
-}()
-```
-
-**Prefer structured concurrency primitives** (`errgroup.Group`, `sync.WaitGroup`) over bare goroutines. They make the wait/cancel structure explicit.
-
-### `context.Context` Propagation
-
-**`context.Context` is the first parameter of every function that does I/O, blocks, or calls another context-aware function.**
-
-```go
-// ✓ CORRECT: ctx threaded through
-func (c *Client) GetUser(ctx context.Context, id int) (*User, error) {
-    req, err := http.NewRequestWithContext(ctx, "GET", c.url(id), nil)
-    if err != nil {
-        return nil, err
-    }
-    return c.do(ctx, req)
-}
-
-// ✘ WRONG: swallowing ctx or creating a new background inside
-func (c *Client) GetUser(id int) (*User, error) {
-    ctx := context.Background()   // caller can no longer cancel
-    // ...
-}
-```
-
-**Rules:**
-- `ctx context.Context` is always the **first** parameter, never a struct field (exception: long-lived values explicitly holding a context for lifecycle, like servers).
-- Never pass `nil` — use `context.TODO()` when truly unknown.
-- Don't store contexts for later — they carry a deadline and a cancellation.
-- Use `context.WithTimeout` / `context.WithDeadline` at the boundary where latency matters (HTTP handler, RPC call), not at the call site of every function.
-
-### Channels for Communication, Mutexes for State
-
-Go Proverb: *"Don't communicate by sharing memory; share memory by communicating."* In practice, both have their place.
-
-```go
-// ✓ Channel — producer/consumer, pipeline stage, cancellation signal
-work := make(chan Job, 10)
-go producer(work)
-for job := range work {
-    process(job)
-}
-
-// ✓ Mutex — shared data with localized access
-type Counter struct {
-    mu sync.Mutex
-    n  int
-}
-func (c *Counter) Inc() { c.mu.Lock(); c.n++; c.mu.Unlock() }
-```
-
-**Heuristic:** if the value flows from one place to another, use a channel. If multiple goroutines read/write the same cell, use a mutex.
-
-**Common channel mistakes:**
-
-```go
-// ✘ Unbuffered channel with no receiver — deadlock
-ch := make(chan int)
-ch <- 1   // blocks forever
-
-// ✘ Sending on a closed channel — panic
-close(ch)
-ch <- 1
-
-// ✘ Double close — panic
-close(ch); close(ch)
-
-// ✓ Only the sender closes; receivers use `v, ok := <-ch` or `for range ch`
-```
-
-### `sync.OnceFunc` / `OnceValue` / `OnceValues` (Go 1.21+)
-
-**Stop hand-rolling `sync.Once` closures.**
-
-```go
-// ✘ OLD pattern — works but verbose
-var (
-    cfgOnce sync.Once
-    cfg     *Config
-    cfgErr  error
+import (
+	"fmt"
+	"sync"
 )
 
-func getConfig() (*Config, error) {
-    cfgOnce.Do(func() {
-        cfg, cfgErr = loadConfig()
-    })
-    return cfg, cfgErr
+func Example() {
+	var workers sync.WaitGroup
+	results := make([]int, 3)
+	for i := range results {
+		workers.Go(func() { results[i] = i * i })
+	}
+	workers.Wait()
+	fmt.Println(results)
+	// Output: [0 1 4]
 }
-
-// ✓ Go 1.21+ — concurrency-safe memoization in one line
-var getConfig = sync.OnceValues(loadConfig)
-
-// For side-effect-only:
-var initLogger = sync.OnceFunc(func() {
-    slog.SetDefault(slog.New(...))
-})
 ```
 
-`go fix` migrates the old pattern automatically.
+Each goroutine writes a different element, and the caller reads results after the join. The loop uses Go 1.22+ per-iteration variables. Returning from `Wait` provides the synchronization; adding a goroutine by itself does not make shared memory safe.
 
-### Loop Variables — Go 1.22+ Scope Fix
+For related tasks that return errors, `golang.org/x/sync/errgroup.WithContext` supplies a group and a derived context canceled on the first non-nil task error or when `Wait` returns. `Wait` still waits for all tasks; tasks must observe cancellation to stop early. Use `SetLimit` where appropriate, and account for `Go` blocking while that limit is full. Plain `errgroup.Group` does not create a cancellation context. [errgroup contract](https://pkg.go.dev/golang.org/x/sync/errgroup)
 
-**Before Go 1.22, loop variables were shared across iterations.** After 1.22, each iteration gets its own copy. Delete shadow-copy workarounds.
+## Cooperative cancellation
+
+Pass a `context.Context` as the first parameter when the operation supports deadlines, cancellation, or request-scoped values. Propagate an existing context into downstream context-aware calls. Do not silently replace it with `context.Background()` or pass nil.
+
+A context parameter does not make a mutex acquisition or an ordinary `io.Reader.Read` cancelable. Use the actual API's cancellation, deadline, or documented close mechanism. Put timeouts where the latency budget is owned; child operations may derive shorter deadlines when their contracts require them.
+
+Usually pass contexts explicitly rather than storing them in a struct. A long-lived object owning background work needs an explicit lifecycle design; storing a request context as incidental object state risks retaining values and applying stale deadlines.
 
 ```go
-// ✓ Go 1.22+: each iteration has its own x — no workaround needed
-for _, x := range xs {
-    go process(x)
-}
+package example
 
-// ✘ Obsolete — delete this pattern in 1.22+ codebases
-for _, x := range xs {
-    x := x           // no longer necessary
-    go process(x)
+import "context"
+
+// Forward copies values until input closes or ctx is canceled.
+// It does not close either caller-owned channel.
+func Forward(ctx context.Context, input <-chan int, output chan<- int) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case value, ok := <-input:
+			if !ok {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case output <- value:
+			}
+		}
+	}
 }
 ```
 
-`go fix` removes these shadow copies automatically.
+If multiple select cases are ready, selection is not a cancellation-priority guarantee. Define whether a concurrent cancellation may race with one more successful operation. Call the cancel functions returned by `WithCancel`, `WithTimeout`, and `WithDeadline` when their scope ends.
 
-### Structured Concurrency with `errgroup`
+## Channels and shared state
 
-**`golang.org/x/sync/errgroup` is the standard structured-concurrency primitive.** It bundles a `WaitGroup`, a shared cancellation context, and first-error propagation.
+Use channels to coordinate communication and mutexes to protect shared invariants; both are ordinary Go tools. A channel value can still point to shared mutable data. See [composition.md](composition.md) for ownership at these boundaries.
+
+The code that closes a channel must know that no more sends can occur. With one producer, that is usually the producer. With several producers, a coordinator can wait for all of them and then close it. Receivers commonly use `for range` or the two-result receive to detect closure. Sending on or closing an already closed channel panics. A nil channel blocks sends and receives and disables that select case.
+
+Keep critical sections small where possible, but preserve serialization and state transitions. Some operations must hold a lock across I/O to prevent interleaved writes; Go's file-descriptor implementation does this. Moving a cache fetch outside a lock can change duplicate-fetch and invalidation behavior. Recheck the relevant state or use a generation/version protocol when required. `singleflight` suppresses overlapping work for a key; it is not a cache or a complete invalidation policy. [File-descriptor write source](https://github.com/golang/go/blob/go1.27.1/src/internal/poll/fd_unix.go)
+
+## Once helpers and panic behavior
+
+Use `sync.OnceFunc`, `OnceValue`, or `OnceValues` when their function-based memoization fits the API. They cache results, including errors; they are not retry mechanisms. A `sync.Once` field can be appropriate when initialization belongs to an object's state.
+
+Their panic behavior differs: after a recovered panic, `Once.Do` considers the function completed and later calls return without invoking it. The helper functions repeat the panic value on subsequent calls. Preserve that distinction when migrating code. Go 1.27.1's `go fix` suite does not provide a Once conversion.
 
 ```go
-// ✓ errgroup: cancel all on first error, wait for all to finish
-func processAll(ctx context.Context, items []Item) error {
-    g, ctx := errgroup.WithContext(ctx)
-    g.SetLimit(8)   // bound concurrency
-    for _, item := range items {
-        g.Go(func() error {
-            return process(ctx, item)
-        })
-    }
-    return g.Wait()   // first non-nil error, or nil
+package example
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+func Example() {
+	calls := 0
+	unavailable := errors.New("unavailable")
+	load := sync.OnceValues(func() (string, error) {
+		calls++
+		return "", unavailable
+	})
+	_, first := load()
+	_, second := load()
+	fmt.Println(calls, errors.Is(first, unavailable), errors.Is(second, unavailable))
+	// Output: 1 true true
 }
 ```
 
-For deduplication of concurrent identical work, use `golang.org/x/sync/singleflight`.
+## Pools and ownership
 
-### Never Hold a Lock Across I/O or Channel Sends
+Use `sync.Pool` only when measurements justify reusing temporary objects. The runtime may discard any pooled item; it is not storage with a retention guarantee. A pool must not be copied after first use.
 
-**Locks are for short critical sections. Any operation that can block — I/O, `<-ch`, `ch <- v`, `time.Sleep` — should happen *outside* the lock.**
+This pool stores only non-nil `*bytes.Buffer` values, so the internal assertion has a concrete invariant. Returning a buffer transfers it back to the pool: callers must stop using it and any slices that alias it. The example excludes large buffers rather than retaining their capacity indefinitely.
 
 ```go
-// ✘ WRONG: HTTP call under the mutex blocks every other caller
-func (c *Cache) Get(key string) (*Value, error) {
-    c.mu.Lock()
-    defer c.mu.Unlock()
-    if v, ok := c.data[key]; ok {
-        return v, nil
-    }
-    return c.fetch(key)   // network call holds the lock — disaster under load
+package example
+
+import (
+	"bytes"
+	"sync"
+)
+
+var buffers = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func acquireBuffer() *bytes.Buffer {
+	return buffers.Get().(*bytes.Buffer)
 }
 
-// ✓ CORRECT: look up under lock, fetch outside, update under lock
-func (c *Cache) Get(key string) (*Value, error) {
-    c.mu.RLock()
-    v, ok := c.data[key]
-    c.mu.RUnlock()
-    if ok {
-        return v, nil
-    }
-    v, err := c.fetch(key)   // no lock held
-    if err != nil {
-        return nil, err
-    }
-    c.mu.Lock()
-    c.data[key] = v
-    c.mu.Unlock()
-    return v, nil
+func releaseBuffer(buffer *bytes.Buffer) {
+	if buffer == nil || buffer.Cap() > 64<<10 {
+		return
+	}
+	buffer.Reset()
+	buffers.Put(buffer)
 }
 ```
 
-For the "avoid thundering-herd fetches" part of this pattern, use `singleflight`.
+A generic wrapper promising arbitrary `T` must also handle nil interfaces; a bare `Get().(T)` does not. Do not generalize this concrete example without carrying its representation and ownership guarantees into the new API.
 
-### Deterministic Concurrency Tests with `testing/synctest`
+## Loop variables and tests
 
-**`testing/synctest` (experimental in Go 1.24, GA in 1.25)** gives you a fake clock and goroutine scheduler so concurrent tests become deterministic — no `time.Sleep`, no flakes.
+Go 1.22 changed variables declared by a loop to have per-iteration instances. The effective language version comes from the module and applicable file constraints. Variables declared outside the loop and assigned with `=` remain shared. `go process(value)` evaluates its arguments before starting the goroutine in older versions too; closures and retained addresses are what distinguish the loop-variable change.
 
-```go
-// ✓ Deterministic test — no real time passes, no sleeps
-import "testing/synctest"
+See [modernization.md](modernization.md) for a complete closure example. See [test.md](test.md) for stable `synctest.Test`, fake-clock behavior, `t.Context` cleanup ordering, and race detection. Fake time does not make arbitrary concurrent code deterministic or repair a data race.
 
-func TestCacheExpiry(t *testing.T) {
-    synctest.Run(func() {
-        c := NewCache(5 * time.Second)
-        c.Set("k", "v")
-        time.Sleep(4 * time.Second)
-        synctest.Wait()   // wait for all goroutines to block
-        if _, ok := c.Get("k"); !ok {
-            t.Fatal("should still be present")
-        }
-        time.Sleep(2 * time.Second)
-        synctest.Wait()
-        if _, ok := c.Get("k"); ok {
-            t.Fatal("should have expired")
-        }
-    })
-}
-```
-
-Inside `synctest.Run`, `time.Now`, `time.Sleep`, and timer-based code run against a virtual clock that advances only when all goroutines are blocked on time-based operations.
-
----
-
-## Summary
-
-- **DO** give every goroutine a waiter and a canceller
-- **DO** thread `context.Context` as the first parameter of every blocking/I/O function
-- **DO** use `errgroup.Group` for structured concurrency
-- **DO** use `sync.OnceFunc` / `OnceValue` / `OnceValues` instead of hand-rolled `sync.Once`
-- **DO** delete `x := x` shadow copies in Go 1.22+ code
-- **DO** use `testing/synctest` for deterministic concurrent tests
-- **DO** use channels for flow, mutexes for shared state
-- **DON'T** fire-and-forget goroutines — they leak
-- **DON'T** store `context.Context` in struct fields (with narrow exceptions)
-- **DON'T** hold a lock across I/O or channel operations
-- **DON'T** close channels from the receiver side — only the sender closes
-
----
-
-## Related Files
-
-- [test.md](test.md) - `testing/synctest`, `t.Context()`, concurrent test patterns
-- [modernization.md](modernization.md) - `sync.OnceFunc` migration, loop-variable fix
-- [errors.md](errors.md) - `errors.Join` for multi-goroutine error aggregation
-
-## References
-
-- [Effective Go — Concurrency](https://go.dev/doc/effective_go#concurrency)
-- [Go Memory Model](https://go.dev/ref/mem) - Happens-before rules
-- [context package](https://pkg.go.dev/context) - Cancellation and deadlines
-- [errgroup](https://pkg.go.dev/golang.org/x/sync/errgroup) - Structured concurrency
-- [singleflight](https://pkg.go.dev/golang.org/x/sync/singleflight) - Coalesce duplicate calls
-- [testing/synctest](https://pkg.go.dev/testing/synctest) - Deterministic concurrent testing
-- [Go 1.22 loop-variable change](https://go.dev/blog/loopvar-preview) - Scope fix rationale
-- [Share memory by communicating](https://go.dev/blog/codelab-share) - Proverb explained
+The [`sync`](https://pkg.go.dev/sync@go1.27.1), [`context`](https://pkg.go.dev/context@go1.27.1), and [memory model](https://go.dev/ref/mem) contracts are authoritative. Additional source examples are cataloged in [resources.md](resources.md).

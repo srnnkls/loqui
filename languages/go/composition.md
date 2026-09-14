@@ -1,383 +1,107 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
 # Go Composition
 
-Structuring behavior, structs vs interfaces vs packages, and composition patterns.
+Choose boundaries around behavior, state, ownership, and invariants. A package is a namespace and dependency boundary; a struct represents related state or implements a useful protocol. A stateless implementation such as an `io.Writer` can still reasonably be a struct.
 
-## Core Commands
+## Interfaces and constructors
 
-### NO Inheritance - Use Composition
+Define small interfaces around what the consumer needs. A single-method interface such as `io.Reader` remains a useful abstraction. Combine interfaces when a consumer needs the combined contract, rather than giving every consumer one large service interface.
 
-**Go has no inheritance. This is intentional and correct.**
+Prefer concrete parameters when no abstraction is useful. Accept an interface when multiple implementations or a protocol boundary make it useful. [Generics](generics.md) preserve relationships among types; they do not automatically improve a function that only calls an interface method.
+
+Returning a concrete type is a useful default for constructors because callers retain access to its capabilities. Returning an interface can deliberately hide representation: `io.NopCloser` returns `io.ReadCloser`. Choose the public contract intentionally. Returning `T` from a generic constructor does not itself mean returning an interface value.
+
+Embedding promotes fields and methods; it does not provide virtual dispatch or behavioral inheritance. Prefer a named field when the embedded type's methods should not become part of the public API. In particular, keep implementation mutexes private.
+
+## Ownership of mutable data
+
+Go passes arguments by value. A slice value contains a reference to backing storage; copying a map, pointer, or interface can also preserve access to shared data. A channel send does not automatically make the receiver the only owner.
+
+For APIs accepting or returning mutable data, specify:
+
+- Whether the callee retains the data after the call.
+- Whether callers or the callee may mutate it, including concurrently.
+- Whether a returned view remains valid after the next operation, a close, or a transaction ending.
+- Whether the caller must copy data to retain it longer.
+
+Copy when the contract requires independent storage. Borrow when the lifetime and mutation rules permit sharing. `slices.Clone`, `maps.Clone`, and ordinary struct assignment are shallow; nested pointers, slices, and maps may still share data. Preserving nil versus non-nil empty values can matter to callers and encoders.
 
 ```go
-// ✓ Composition via embedding
-type Reader interface {
-    Read(p []byte) (n int, err error)
+package example
+
+import "bytes"
+
+// Blob owns its byte storage. Its methods do not support concurrent mutation.
+type Blob struct {
+	data []byte
 }
 
-type BufferedReader struct {
-    reader Reader
-    buf    []byte
+// NewBlob copies data; callers may modify their input after this call.
+func NewBlob(data []byte) *Blob {
+	return &Blob{data: bytes.Clone(data)}
 }
 
-// ✓ Struct embedding (use sparingly)
-type LoggedWriter struct {
-    io.Writer  // Embedded interface
-    logger *log.Logger
-}
-
-func (lw *LoggedWriter) Write(p []byte) (n int, err error) {
-    lw.logger.Printf("Writing %d bytes", len(p))
-    return lw.Writer.Write(p)  // Delegate to embedded
+// Bytes returns an independent copy that the caller may modify.
+func (b *Blob) Bytes() []byte {
+	return bytes.Clone(b.data)
 }
 ```
 
-### Interfaces: Small and Focused
+A copying API is not always the right design. Pebble returns a view whose lifetime is tied to a closer; bbolt returns database-owned bytes valid during a transaction. Those APIs deliberately avoid a copy and document the restrictions. See the pinned examples in [resources.md](resources.md).
 
-**Interfaces are the default abstraction. Keep them small.**
+## Pointer and value receivers
+
+Use a pointer receiver when the method mutates the receiver itself, when copying is undesirable, or when the type contains synchronization state that must not be copied after use. A value receiver suits a small value type when copying matches its semantics.
+
+Consistency within a type is a good default. It is not a language rule: `time.Time` uses value receivers for operations such as `MarshalJSON` and a pointer receiver for `UnmarshalJSON`. Preserve the method sets needed by callers and interfaces. A value receiver containing a slice can still mutate shared elements; it does not promise immutability.
+
+Design useful zero values where possible. A constructor remains appropriate when an API needs a non-nil dependency, validated configuration, or initialized resources. Document a constructor requirement rather than allowing an accidental nil dereference to define it.
+
+## Iterators with failures
+
+Use `iter.Seq` or `iter.Seq2` when incremental traversal or avoiding materialization benefits callers. A returned slice is often simpler when callers need indexing, repeated traversal, or an owned snapshot. State whether an iterator can be restarted, used concurrently, or retained after its owner closes.
+
+An iterator over I/O needs an error channel in its API. For a scanner-backed iterator, distinguish EOF from `Scanner.Err()`. This example keeps the scanner's default token limit, approximately 64 KiB including any delimiter; a longer line is an error. Applications needing a different limit should configure `Scanner.Buffer` or choose another reader API.
 
 ```go
-// ✓ CORRECT: Focused interfaces
-type Storage interface {
-    Save(key string, value []byte) error
-    Load(key string) ([]byte, error)
-}
+package example
 
-type Closer interface {
-    Close() error
-}
+import (
+	"bufio"
+	"io"
+	"iter"
+)
 
-// ✓ Compose interfaces
-type ReadCloser interface {
-    Reader
-    Closer
-}
-
-// ✘ WRONG: Fat interface
-type Service interface {
-    Save(key string, value []byte) error
-    Load(key string) ([]byte, error)
-    Delete(key string) error
-    List() ([]string, error)
-    Close() error
-    Connect() error
-    Disconnect() error
-    // ... 10 more methods
+// Lines consumes r and yields each line without its line ending.
+// On scan failure it yields one final empty string with a non-nil error.
+// It uses bufio.Scanner's default token limit and does not close r.
+// Treat the result as single-use; do not invoke it concurrently.
+func Lines(r io.Reader) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		scanner := bufio.NewScanner(r)
+		for scanner.Scan() {
+			if !yield(scanner.Text(), nil) {
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			yield("", err)
+		}
+	}
 }
 ```
 
-**Accept interfaces, return structs** (usually).
+Consumers check the error before using a yielded line. If a consumer ends iteration early, this function cannot report a later, unobserved read error. Respect a false return from `yield`: do not call it again or launch work that outlives that iteration without an explicit lifetime contract. A scanner-style object with an `Err()` method or a callback function returning an error may fit an existing API better than `Seq2`.
 
-```go
-// ✓ CORRECT
-func Process(r io.Reader) (*Result, error) { ... }
+## Optional values and initialization
 
-// ✘ Usually wrong: returning interface hides concrete type
-func Process(r io.Reader) (io.Writer, error) { ... }
-```
+Use `(T, bool)` when a lookup can miss without failing. Use `(T, error)` for an operation that can fail. A pointer can represent optional data when nil has a clear meaning, for example an omitted configuration field.
 
-### ONLY Create Structs for State
+Go 1.26's `new(expr)` creates a pointer to an initialized value. It is useful when that representation fits the API; it is not a reason to turn ordinary value fields into pointers. See [modernization.md](modernization.md).
 
-**Structs exist when you need to group data or manage state.**
+Keep side-effectful initialization explicit where callers need to choose configuration, handle errors, or control lifetime. Avoid introducing `init`-time I/O merely to shorten construction.
 
-```go
-// ✓ Struct managing mutable state
-type MessageBuffer struct {
-    messages []Message
-    mu       sync.Mutex
-}
-
-func (mb *MessageBuffer) Add(msg Message) {
-    mb.mu.Lock()
-    defer mb.mu.Unlock()
-    mb.messages = append(mb.messages, msg)
-}
-
-// ✓ Struct grouping immutable data
-type PRRef struct {
-    Owner  string
-    Repo   string
-    Number int
-}
-
-// ✘ WRONG: Empty struct as namespace
-type MessageUtils struct{}
-
-func (MessageUtils) ParseTags(tags string) []string { ... }
-
-// ✓ CORRECT: Package-level function
-func ParseTags(tags string) []string { ... }
-```
-
-### Package-Level Functions Are First-Class
-
-**Don't create structs just to hold functions. Use packages.**
-
-```go
-// ✓ CORRECT: Package-level functions
-package validation
-
-func ValidateEmail(email string) error { ... }
-func ValidateAge(age int) error { ... }
-
-// ✘ WRONG: Unnecessary struct wrapper
-package validation
-
-type Validator struct{}
-
-func (v Validator) ValidateEmail(email string) error { ... }
-func (v Validator) ValidateAge(age int) error { ... }
-```
-
-### Methods vs Functions
-
-**Add methods when:**
-- Operating on struct's state
-- Method belongs to the type's conceptual API
-- Implementing an interface
-
-**Use functions when:**
-- Stateless operation
-- Works on multiple types
-- Doesn't conceptually "belong" to a type
-
-```go
-// ✓ Method: operates on state
-func (c *Client) GetReview(id int64) (*Review, error) {
-    return c.restClient.GetReview(c.ctx, id)
-}
-
-// ✓ Function: stateless transformation
-func ParsePRRef(ref string) (*PRRef, error) {
-    // ... parsing logic
-}
-
-// ✓ Function: operates on type but doesn't need state
-func FormatReview(review *Review) string {
-    return fmt.Sprintf("#%d: %s", review.ID, review.Body)
-}
-```
-
-### Pointer vs Value Receivers
-
-**Use pointer receivers when:**
-- Method mutates the receiver
-- Struct is large (avoid copying)
-- Consistency: if any method needs pointer, all should use pointer
-
-**Use value receivers when:**
-- Method doesn't mutate
-- Struct is small (few fields, no mutexes)
-- Type is primitive-like (time.Time, etc.)
-
-```go
-// ✓ Pointer receivers for mutable state
-type Client struct {
-    token string
-    cache map[string]*Review
-}
-
-func (c *Client) AddToCache(id string, review *Review) {
-    c.cache[id] = review  // Mutates
-}
-
-func (c *Client) GetFromCache(id string) *Review {
-    return c.cache[id]  // Doesn't mutate, but pointer for consistency
-}
-
-// ✓ Value receiver for immutable type
-type PRRef struct {
-    Owner  string
-    Repo   string
-    Number int
-}
-
-func (pr PRRef) String() string {
-    return fmt.Sprintf("%s/%s#%d", pr.Owner, pr.Repo, pr.Number)
-}
-```
-
-**CRITICAL: Be consistent within a type. Don't mix pointer and value receivers.**
-
-### Generics as an Alternative to Interfaces
-
-**Interfaces are for runtime polymorphism. Generics are for compile-time parametricity. Pick the right tool.**
-
-When behavior is uniform across types — the function body treats `T` as an opaque value, never inspects it — prefer generics over an interface.
-
-```go
-// ✘ Interface indirection where a generic would read cleaner
-type Summable interface{ Add(Summable) Summable }
-
-// ✓ Generic — no interface to implement, full type safety
-func Sum[T cmp.Ordered](xs []T) T {
-    var total T
-    for _, x := range xs {
-        total += x
-    }
-    return total
-}
-```
-
-**Keep interfaces when** the set of implementers is open, when dispatch needs to happen at runtime (value, not type), or when the abstraction hides substantial behavior differences.
-
-See [generics.md](generics.md) for the full treatment.
-
-### Iterator Pattern (Go 1.23+)
-
-**`iter.Seq[T]` and `iter.Seq2[K, V]` let functions produce sequences without materializing a slice.** Use them when:
-- The collection might be large
-- The caller may short-circuit (break out early)
-- The sequence is naturally lazy (streams, paginated APIs, file lines)
-
-```go
-// ✓ CORRECT: iterator — caller controls consumption
-func Lines(r io.Reader) iter.Seq[string] {
-    return func(yield func(string) bool) {
-        s := bufio.NewScanner(r)
-        for s.Scan() {
-            if !yield(s.Text()) {
-                return   // caller broke out
-            }
-        }
-    }
-}
-
-for line := range Lines(file) {
-    if strings.HasPrefix(line, "#") {
-        continue
-    }
-    process(line)
-}
-
-// ✓ iter.Seq2 for key/value pairs
-func Entries[K comparable, V any](m map[K]V) iter.Seq2[K, V] {
-    return func(yield func(K, V) bool) {
-        for k, v := range m {
-            if !yield(k, v) {
-                return
-            }
-        }
-    }
-}
-```
-
-**When to prefer returning `[]T` instead:** when the caller almost always wants the whole thing, when the collection is already in memory, or when you need random access. Iterators are not a universal replacement.
-
-### Constructor Functions
-
-**Use New* functions for initialization. Return concrete types.**
-
-```go
-// ✓ CORRECT
-func NewClient(token string) (*Client, error) {
-    if token == "" {
-        return nil, errors.New("token required")
-    }
-    return &Client{
-        token: token,
-        cache: make(map[string]*Review),
-    }, nil
-}
-
-// ✓ Variant constructors
-func NewClientWithCache(token string, cache Cache) (*Client, error) { ... }
-
-// ✘ WRONG: Returning interface hides implementation
-func NewClient(token string) (ClientInterface, error) { ... }
-```
-
-**Go 1.26: `new(expr)`.** The built-in `new` now accepts an expression, not just a type. This retires the `ptr[T]` helper pattern that proliferated in pre-1.26 codebases.
-
-```go
-// ✓ Go 1.26+: inline pointer-to-literal
-timeout := new(30 * time.Second)   // *time.Duration
-pending := new("pending")          // *string
-
-// ✘ Delete this helper — `go fix` can migrate for you
-func ptr[T any](v T) *T { return &v }
-p := ptr(42)
-```
-
-### Embedding: Use Sparingly
-
-**Embedding is powerful but can be confusing. Prefer explicit fields.**
-
-```go
-// ✓ Embedding for interfaces (delegation)
-type LoggedWriter struct {
-    io.Writer
-    logger *log.Logger
-}
-
-// ✓ Explicit field when clarity matters
-type Client struct {
-    rest    *rest.Client
-    graphql *graphql.Client
-}
-
-// ✘ Embedding concrete types often confusing
-type User struct {
-    Person  // Promotes all Person fields - unclear ownership
-    Role string
-}
-
-// ✓ BETTER: Explicit field
-type User struct {
-    Person Person  // Clear: User has a Person
-    Role   string
-}
-```
-
----
-
-## Architecture Layers
-
-**Build from simple pieces:**
-
-- **Data layer**: Structs with clear ownership (immutable when possible)
-- **Function layer**: Package-level functions for stateless operations
-- **Interface layer**: Small, focused interfaces for abstraction
-- **Implementation layer**: Structs with methods implementing interfaces
-
----
-
-## Summary
-
-- **NEVER** try to emulate inheritance (Go doesn't have it intentionally)
-- **DO** use small, focused interfaces (1-3 methods)
-- **DO** accept interfaces, return structs (usually)
-- **DO** use package-level functions for stateless operations
-- **DO** use methods when operating on struct's state or implementing interfaces
-- **DO** use pointer receivers consistently (all or value, no mixing)
-- **DO** use New* constructor functions returning concrete types
-- **DO** use embedding sparingly (interfaces yes, structs rarely)
-- **DO** design types around behavior, not data hierarchy
-- **DO** reach for generics (not `any`, not an interface) when behavior is uniform over types
-- **DO** return `iter.Seq[T]` / `iter.Seq2[K,V]` (1.23+) for lazy/streaming sequences
-- **DO** use `new(expr)` (1.26+) instead of `ptr[T]` helpers
-- **DON'T** create empty structs as namespaces (use packages)
-- **DON'T** create fat interfaces (split into smaller ones)
-- **DON'T** mix pointer and value receivers on same type
-- **DON'T** return interfaces from constructors (usually)
-
----
-
-## Related Files
-
-- **generics.md**: Type parameters, constraints, when to choose generics over interfaces
-- **quality.md**: When methods belong on type vs extracted to functions
-- **modules.md**: Organizing functions into cohesive packages
-- **errors.md**: Error handling patterns, error types
-- **modernization.md**: `new(expr)`, iterators, modernization guidance
-
-## References
-
-- [Effective Go - Methods](https://go.dev/doc/effective_go#methods)
-- [Go Proverbs](https://go-proverbs.github.io/) - "The bigger the interface, the weaker the abstraction"
-- [Accept Interfaces, Return Structs](https://bryanftan.medium.com/accept-interfaces-return-structs-in-go-d4cab29a301b)
-- [Range-over-func](https://go.dev/blog/range-functions) - Iterator pattern (Go 1.23)
-- [When to use generics](https://go.dev/blog/when-generics) - Generics vs interfaces
+Related guidance: [errors](errors.md), [concurrency](concurrency.md), [modules](modules.md), and [reference contracts](resources.md). The [`io`](https://pkg.go.dev/io@go1.27.1), [`iter`](https://pkg.go.dev/iter@go1.27.1), and [`bufio.Scanner`](https://pkg.go.dev/bufio@go1.27.1#Scanner) documentation defines the relevant standard-library contracts.

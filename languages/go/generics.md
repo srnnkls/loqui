@@ -1,283 +1,161 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
 # Go Generics
 
-Type parameters, constraints, and when to prefer generics over interfaces or `any`.
+Use a concrete type when it expresses the operation. Use an interface for a behavioral contract. Add type parameters when they preserve a useful relationship among arguments, results, or stored values. These approaches compose.
 
-Generics landed in Go 1.18. They are no longer new — treat them as a first-class tool. The decision tree is: *concrete type when you can, generics when behavior is uniform across types, interface when dispatch needs to happen at runtime.*
+## Preserve type relationships
 
----
-
-## Core Guidelines
-
-### Prefer Generics Over `any`
-
-`any` (alias for `interface{}`) discards compile-time type information. Generics preserve it.
+A collection helper can preserve its element type without a runtime assertion at the call site. `any` remains appropriate for heterogeneous values, reflection, or a protocol that intentionally accepts arbitrary data.
 
 ```go
-// ✘ WRONG: any erases the type
-func First(xs []any) any {
-    if len(xs) == 0 {
-        return nil
-    }
-    return xs[0]
-}
-// Caller must type-assert: First(xs).(User) — runtime cost, runtime panic potential
+package example
 
-// ✓ CORRECT: generic preserves T
-func First[T any](xs []T) (T, bool) {
-    var zero T
-    if len(xs) == 0 {
-        return zero, false
-    }
-    return xs[0], true
-}
-// Caller: user, ok := First(users) — no assertion, fully type-safe
-```
-
-**`any` is still correct for genuine heterogeneity:** JSON decoding into unknown shapes, reflection, heterogeneous containers, function receivers that truly don't constrain T. Don't use it as the default.
-
-### Prefer Generics Over Single-Method Interfaces
-
-If an interface exists only to abstract behavior over a fixed set of types with a shared operation, generics often read cleaner.
-
-```go
-// ✘ Interface indirection when the set is closed
-type Number interface{ Add(Number) Number }
-
-// ✓ Generic function — no interface needed
-func Sum[T cmp.Ordered](xs []T) T {
-    var total T
-    for _, x := range xs {
-        total += x
-    }
-    return total
+// First returns the first element, or the zero value and false for an empty slice.
+func First[T any](items []T) (T, bool) {
+	if len(items) == 0 {
+		var zero T
+		return zero, false
+	}
+	return items[0], true
 }
 ```
 
-**Keep interfaces when:** you need runtime polymorphism (dispatch based on value), the set of implementers is open (users can add new ones), or the abstraction hides substantial behavior differences.
+A function that only calls `Read` will usually be simpler with an `io.Reader` parameter than with a type parameter constrained by `io.Reader`. A method constraint can still be useful when other parts of the signature must preserve the concrete type. Do not decide between interfaces and generics solely from the number of methods or whether users can add implementations.
 
-### Use `cmp.Ordered` and `constraints` for Common Bounds
+Generic code is not guaranteed to be faster than interface-based code. Measure performance in the operation that matters. A type switch may indicate an unnecessary type parameter, but a deliberate specialization does not erase every other benefit of preserving `T`.
 
-Don't hand-roll constraint interfaces. Go 1.21 moved the common ones into `cmp`.
+## Constraints and inference
+
+`cmp.Ordered` covers ordered integer and floating-point types and strings; it does not mean all numeric types and excludes complex numbers. Go has no general standard-library `Integer` constraint. Define the bounds the operation actually needs. Use `~` to admit defined types with the specified underlying type.
 
 ```go
-import "cmp"
+package example
 
-// ✓ Stdlib constraint
-func Max[T cmp.Ordered](a, b T) T {
-    if a > b {
-        return a
-    }
-    return b
-}
-
-// ✓ Union constraint for custom bounds
+// Integer includes Go's integer types and defined types with those underlying types.
 type Integer interface {
-    ~int | ~int32 | ~int64 | ~uint | ~uint32 | ~uint64
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr
 }
 
-func SumInts[T Integer](xs []T) T { ... }
-```
-
-The `~` means "any type whose underlying type is …" — essential for accepting user-defined wrapper types like `type UserID int64`.
-
-### Type Inference: Let Go Figure It Out
-
-Avoid explicit type arguments unless inference fails.
-
-```go
-// ✘ Redundant
-result := slices.Map[User, string](users, User.Name)
-
-// ✓ Let inference work
-result := slices.Map(users, User.Name)
-```
-
-Specify type arguments only for: constructors of generic types (`NewSet[string]()`), when inference genuinely fails, or when a nil literal breaks inference (`First[User](nil)`).
-
-### Generic Functions: Small, Total, Mechanical
-
-Generic functions work best when the body treats `T` as an opaque value — compared with `cmp.Ordered`, moved, passed, stored. If the body has a type-switch on `T`, generics aren't buying you anything.
-
-```go
-// ✓ CORRECT: mechanical, no inspection of T
-func Map[T, U any](xs []T, f func(T) U) []U {
-    out := make([]U, len(xs))
-    for i, x := range xs {
-        out[i] = f(x)
-    }
-    return out
-}
-
-// ✘ WRONG: type-switch inside generic body — just take an interface instead
-func Describe[T any](x T) string {
-    switch v := any(x).(type) {
-    case int:
-        return fmt.Sprintf("int: %d", v)
-    case string:
-        return fmt.Sprintf("string: %s", v)
-    }
-    return "unknown"
+// Sum adds items using T's arithmetic, including its overflow behavior.
+func Sum[T Integer](items []T) T {
+	var total T
+	for _, item := range items {
+		total += item
+	}
+	return total
 }
 ```
 
-### Generic Types: Containers and State Machines
-
-Generic *types* shine when the whole data structure is parametric and behavior is uniform over `T`.
+Let inference supply type arguments when that keeps the call clear. Specify them when inference cannot find them or when an intentional instantiation is clearer. There is no `slices.Map` in the standard library; a local mapping helper can demonstrate inference:
 
 ```go
-// ✓ Typed set — no interface{} casts at use sites
-type Set[T comparable] struct {
-    m map[T]struct{}
+package example
+
+import "fmt"
+
+// Map applies f in order and returns a new, non-nil slice, including for empty input.
+// Elements returned by f may still contain references shared with the input.
+func Map[T, U any](items []T, f func(T) U) []U {
+	out := make([]U, len(items))
+	for i, item := range items {
+		out[i] = f(item)
+	}
+	return out
 }
 
-func NewSet[T comparable]() *Set[T] {
-    return &Set[T]{m: make(map[T]struct{})}
+type User struct {
+	Name string
 }
 
-func (s *Set[T]) Add(x T)           { s.m[x] = struct{}{} }
-func (s *Set[T]) Contains(x T) bool { _, ok := s.m[x]; return ok }
-func (s *Set[T]) Len() int          { return len(s.m) }
-
-// Usage
-ids := NewSet[UserID]()
-ids.Add(42)
-if ids.Contains(42) { ... }
+func ExampleMap() {
+	users := []User{{Name: "Ada"}, {Name: "Grace"}}
+	names := Map(users, func(user User) string { return user.Name })
+	fmt.Println(names)
+	// Output: [Ada Grace]
+}
 ```
 
-### Generic Type Aliases (Go 1.24+)
+## Containers and aliases
 
-Type aliases can now carry type parameters, letting you rename or partially-apply generic types.
+A generic type is useful when callers need the same data structure with different element types. Do not add parameters that neither the implementation nor its consumers need. Public generic APIs can be useful even when the defining package currently has only one instantiation.
+
+Generic aliases, stable since Go 1.24, give another name to a type without creating a distinct type. A defined type has its own identity; neither mechanism automatically adds a runtime allocation.
 
 ```go
-// ✓ Rename a long generic type at package boundary
-type Result[T any] = struct {
-    Value T
-    Err   error
-}
+package example
 
-// ✓ Partial application — fix one parameter, expose another
+// StringMap names a map whose keys are strings.
 type StringMap[V any] = map[string]V
 
-func Lookup(m StringMap[User], key string) (User, bool) {
-    u, ok := m[key]
-    return u, ok
+// Result groups a value and its error for storage or transport as one value.
+type Result[T any] struct {
+	Value T
+	Err   error
 }
 ```
 
-Aliases don't create a new type — they're sugar. Use them to shorten call sites or provide domain vocabulary without the cost of a wrapper struct.
+Prefer `(T, error)` for direct function returns. A `Result[T]` struct can be appropriate as a channel or collection element. Likewise, `func New[T Storage]() T` returns its instantiated `T`, which may be concrete; evaluate how the constructor creates the value instead of assuming every constraint produces an interface value.
 
-### Recursive Generic Parameters (Go 1.26+)
+## Self-type relationships
 
-A type parameter can now refer to itself in its own constraint list, which unlocks self-referencing data structures and fluent builder patterns that previously required workarounds.
+An ordinary generic interface can relate a result to a type argument. This form has been expressible since Go 1.18:
 
 ```go
-// ✓ Self-typed builder — chain methods preserve the concrete subtype
+package example
+
+// Builder describes builders that preserve a chosen result type.
 type Builder[Self any] interface {
-    Build() Self
-    With(k, v string) Self
+	Build() Self
+	With(key, value string) Self
 }
-
-// Before 1.26, this kind of pattern required unsafe interface tricks or code generation.
 ```
 
-Use sparingly — the vast majority of generic code does not need recursive constraints.
-
-### Common Patterns
-
-**Typed `sync.Pool`:**
+Go 1.26 additionally permits a generic type to refer to itself in its own type-parameter list:
 
 ```go
-// ✓ Type-safe pool — no assertion in Get
-type Pool[T any] struct {
-    p sync.Pool
-}
+package example
 
-func NewPool[T any](new func() T) *Pool[T] {
-    return &Pool[T]{p: sync.Pool{New: func() any { return new() }}}
+// Adder relates the operand and result type of Add to the implementing type.
+type Adder[A Adder[A]] interface {
+	Add(A) A
 }
-
-func (p *Pool[T]) Get() T  { return p.p.Get().(T) }
-func (p *Pool[T]) Put(x T) { p.p.Put(x) }
 ```
 
-**Optional value:**
+The second example demonstrates the newer recursive constraint. Ordinary fluent interfaces and self-type relationships did not generally require unsafe code before it. Use these relationships where they clarify a real API.
+
+## Generic methods in Go 1.27
+
+Methods can declare their own type parameters. This can place a generic operation on the object whose state it uses. Interface methods cannot declare type parameters, and generic methods do not implement interface methods.
 
 ```go
-// ✓ Two-return pattern — idiomatic for "might not be there"
-func Find[T any](xs []T, pred func(T) bool) (T, bool) {
-    for _, x := range xs {
-        if pred(x) {
-            return x, true
-        }
-    }
-    var zero T
-    return zero, false
+package example
+
+import "fmt"
+
+// Batch limits how many elements of a borrowed slice are selected.
+type Batch struct {
+	Limit int
+}
+
+// Take returns a view of at most Limit elements; non-positive limits return an empty view.
+func (b Batch) Take[T any](items []T) []T {
+	return items[:min(max(b.Limit, 0), len(items))]
+}
+
+func ExampleBatch() {
+	fmt.Println((Batch{Limit: 2}).Take([]int{1, 2, 3}))
+	// Output: [1 2]
 }
 ```
 
-**Result-like wrapper:** don't do it. Go's `(T, error)` convention is the idiomatic result type. Avoid inventing `Result[T]` just because other languages have it.
+## Typed pools need a precise contract
 
----
+A wrapper around `sync.Pool` still needs a runtime type assertion internally. Returning arbitrary `T` using `p.Get().(T)` fails when the stored interface is nil. A typed nil pointer and a nil interface are different cases.
 
-## Anti-Patterns
+Prefer a concrete pool when only one resource type is needed; see the buffer example in [concurrency.md](concurrency.md). If a generic wrapper is warranted, constrain its representation so every promised value can be stored, or use a non-nil holder for values including nil interfaces. Document initialization and ownership on return to the pool. Benchmark before adding a pool: it is an allocation optimization, not persistent storage.
 
-```go
-// ✘ Generic-for-generic's-sake — only ever called with one concrete type
-func ProcessUsers[T any](users []T) { ... }   // T is always User — drop the parameter
-
-// ✘ Type-switch inside generic body — use sum types via interface instead
-func Handle[T any](x T) {
-    switch v := any(x).(type) { ... }    // defeats the point of generics
-}
-
-// ✘ Overuse of constraints when `any` is fine
-type HasID interface{ ID() string }
-func ByID[T HasID](xs []T) map[string]T { ... }
-// If only one concrete type in scope, just write the non-generic version.
-
-// ✘ Generic constructors returning interface types
-func New[T Storage]() T { ... }
-// Constructors should return concrete types. If T is constrained to an interface,
-// you've contorted the type system to reinvent factories.
-
-// ✘ Exporting parameterized types when a single concrete type would do
-type Cache[K comparable, V any] struct { ... }   // Fine if users really parameterize
-// But if every consumer calls NewCache[string, *User], just ship CacheUser.
-```
-
----
-
-## Summary
-
-- **DO** prefer generics over `any` when the type is known at compile time
-- **DO** prefer generics over single-method interfaces for closed, uniform behavior
-- **DO** use `cmp.Ordered` and `~T` underlying-type constraints from stdlib
-- **DO** let type inference work — avoid explicit type arguments at call sites
-- **DO** keep generic bodies mechanical — no type-switches on `T`
-- **DO** use generic type aliases (1.24+) to shorten long types at package boundaries
-- **DO** use recursive type parameters (1.26+) for self-typed builders — sparingly
-- **DON'T** write `interface{}` / `any` when you mean "any type, uniformly"
-- **DON'T** add type parameters when there is only ever one concrete type
-- **DON'T** invent `Result[T]` — Go's `(T, error)` is the idiomatic result type
-- **DON'T** return interface types from generic constructors
-
----
-
-## Related Files
-
-- [composition.md](composition.md) - Interfaces vs generics, structural design
-- [modernization.md](modernization.md) - `cmp.Ordered`, 1.24 aliases, 1.26 features
-- [quality.md](quality.md) - Why `any` is still an anti-pattern by default
-
-## References
-
-- [Go Generics tutorial](https://go.dev/doc/tutorial/generics) - Official intro
-- [Type parameters proposal](https://go.googlesource.com/proposal/+/refs/heads/master/design/43651-type-parameters.md) - Design rationale
-- [cmp package](https://pkg.go.dev/cmp) - `Ordered`, `Compare`, `Or`
-- [slices package](https://pkg.go.dev/slices) - Canonical generic utilities
-- [Go 1.24 release notes — generic aliases](https://go.dev/doc/go1.24#language)
-- [When to use generics](https://go.dev/blog/when-generics) - Ian Lance Taylor
+See [composition.md](composition.md) for interfaces and aliasing, and [resources.md](resources.md) for reference sources. [When to use generics](https://go.dev/blog/when-generics), [`cmp`](https://pkg.go.dev/cmp@go1.27.1), [Go 1.26 language changes](https://go.dev/doc/go1.26#language), and [generic-method restrictions](https://github.com/golang/go/issues/77273) explain the underlying decisions and constraints.
