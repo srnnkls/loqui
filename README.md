@@ -38,7 +38,7 @@ Advance every source with `phora update`, or one source with `phora update <sour
 
 These guides share common themes:
 
-- *Naming over comments* — Spend 5x more time on names than comments
+- *Clear naming and documentation* — Use precise names and document behavior, contracts, and non-obvious decisions
 - *Composition over inheritance* — Even in languages that support inheritance
 - *Feature-based organization* — Group by domain, not technical layer
 - *Parse at boundaries* — Accept permissive input, convert to strict types immediately

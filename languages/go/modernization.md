@@ -1,356 +1,179 @@
 ---
-paths: "**/*.go, **/go.mod"
+paths: "**/*.go, **/go.mod, **/go.work"
 ---
 
 # Go Modernization
 
-Modern Go features (1.20 → 1.26), the `go fix` modernizers, and how to keep AI-generated code current.
+Baseline: Go 1.27, checked with Go 1.27.1 on 14 September 2026. Choose modern facilities by their contracts, and verify unfamiliar APIs with the installed documentation and compiler. Generated code deserves the same checks as handwritten code.
 
----
+## Toolchain and compatibility
 
-## AI Drift Warning
+Use a supported patch toolchain for development. Decide the module's minimum version separately: raising its `go` directive changes the contract for consumers. A compiler upgrade alone does not require that change. File build constraints can also affect the language/API baseline used by tools. See [modules.md](modules.md).
 
-**AI agents — this one included — systematically generate obsolete Go.** Two forces drive this:
+Check the environment before migrating:
 
-1. **Training cutoff.** A model's weights freeze at some date; anything landed in Go after that date is literally unknown.
-2. **Frequency bias.** Even for features the model *does* know, years of pre-generics Go in the training data outweigh the few months of modern idioms. The model defaults to what it has seen most often.
-
-The practical effect: agents produce code that *compiles and passes tests* but uses patterns that have been superseded for years — `interface{}` where generics belong, hand-rolled multi-error types instead of `errors.Join`, `for i, x := range xs { x := x; ... }` shadow copies after 1.22 made them unnecessary, `tools.go` instead of `go.mod` tool directives.
-
-**Mandatory habit for every code-gen session:**
-
-```bash
-# From a clean git state:
-go fix ./...        # apply modernizers
-go test ./...       # confirm nothing broke
-git diff            # review the diff — it's usually obvious and safe
-git commit
+```sh
+go version
+go env GOVERSION GOTOOLCHAIN GOWORK
+go doc errors.AsType
 ```
 
-Run this **after every significant generation** — not just after toolchain upgrades. Modernizers are behavior-preserving by design, so the diff is easy to trust.
+Use [release notes](https://go.dev/doc/devel/release) and the [source catalog](resources.md) to verify feature availability. Do not reject a released feature merely because an older guide omits it.
 
-For Claude Code sessions, invoke the `go-modern-guidelines` skill (`/use-modern-go`) if available — it primes the model against frequency bias for the duration of the session.
+## Applying go fix
 
----
+Go 1.26 rebuilt `go fix` around analyzers for code modernization. Inspect the analyzers in the installed toolchain; their names and coverage can change between releases.
 
-## `go fix` Modernizers
-
-Go 1.24 rewrote `go fix` to be the canonical, push-button home for code modernization. The command ships with dozens of *modernizers* that update a codebase to current language and standard-library idioms.
-
-```bash
-# Preview diffs without writing
+```sh
+go tool fix help
+go tool fix help any
 go fix -diff ./...
+```
 
-# Apply fixes in place
+`-diff` previews changes without writing source. It exits with status 1 when a patch is available, so account for that in automation. Review the preview, then apply the intended fixes from a clean or otherwise clearly isolated working state:
+
+```sh
 go fix ./...
-
-# Run a specific fixer only
-go fix -fix=slicesclone ./...
-
-# List available fixers for your toolchain
-go fix -help
-```
-
-**What the fixer suite covers** (toolchain-dependent; the list grows with each release):
-
-- Pre-generics patterns → generic `slices` / `maps` calls
-- `sort.Slice` → `slices.SortFunc`
-- Hand-rolled `for` search loops → `slices.Contains` / `slices.Index`
-- Old `for i := 0; i < n; i++` counters → `for range n` (1.22)
-- Shadow-copy `x := x` workarounds inside loops (obsolete since 1.22)
-- `interface{}` → `any`
-- `[]byte(fmt.Sprintf(…))` → `fmt.Appendf(…)` (`fmtappendf`)
-- `strings.Index` + slicing → `strings.Cut` (`stringscut`)
-- `sync.Once` + closure → `sync.OnceFunc` / `OnceValue` (1.21)
-- `tools.go` blank imports → `go.mod` tool directives (1.24)
-- `ptr[T]` helpers / address-of-literal hacks → `new(expr)` (1.26)
-
-**Source-level inliner.** Beyond the built-in modernizers, `go fix` now supports inlining your *own* API migrations: mark a deprecated function with `//go:fix inline` and provide a replacement; `go fix` rewrites every call site across a codebase. This is the correct tool for library migrations — far safer than a `gorename` script or ad-hoc `sed`.
-
----
-
-## Stdlib-First Replacements
-
-The 1.21–1.26 window moved a lot of ecosystem churn into stdlib. Before reaching for a third-party package, check whether stdlib now covers it.
-
-| Old pattern | Modern replacement | Since |
-|---|---|---|
-| `hashicorp/go-multierror` | `errors.Join` | 1.20 |
-| Single `%w` + manual concatenation | `fmt.Errorf` with multiple `%w` | 1.20 |
-| `[]byte(fmt.Sprintf(…))` | `fmt.Appendf(buf, …)` | 1.19 |
-| `i := strings.Index(s, sep)` + slicing | `strings.Cut(s, sep)` | 1.18 |
-| Hand-rolled sort with `sort.Slice` | `slices.SortFunc` | 1.21 |
-| `for _, x := range xs { if x == t ... }` | `slices.Contains` | 1.21 |
-| `map[K]struct{}` sets for dedup | `slices.Compact` after sort | 1.21 |
-| `math.Min` / `math.Max` | `min` / `max` builtins | 1.21 |
-| `for k := range m { delete(m, k) }` | `clear(m)` | 1.21 |
-| `log` package / 3rd-party loggers | `log/slog` | 1.21 |
-| `sync.Once` + captured variables | `sync.OnceFunc` / `OnceValue` / `OnceValues` | 1.21 |
-| Hand-written Ordered constraint | `cmp.Ordered` | 1.21 |
-| Nested `if a != "" { return a } ... ` fallback | `cmp.Or` | 1.22 |
-| `math/rand` with global seed | `math/rand/v2` | 1.22 |
-| `x := x` inside range loops | Delete — 1.22 per-iteration scope fixes it | 1.22 |
-| Returning `[]T` when caller only iterates | `iter.Seq[T]` / `iter.Seq2[K,V]` | 1.23 |
-| Manual string interning | `unique.Make` | 1.23 |
-| Manual struct-layout fiddling | `structs` package | 1.23 |
-| `tools.go` blank imports | `go.mod` tool directive | 1.24 |
-| `context.WithCancel` in tests | `t.Context()` | 1.24 |
-| `b.N` loops in benchmarks | `testing.B.Loop` | 1.24 |
-| Ad-hoc path-traversal guards | `os.Root` / `os.OpenRoot` | 1.24 |
-| `runtime.SetFinalizer` | `runtime.AddCleanup` | 1.24 |
-| Concurrent tests with `time.Sleep` | `testing/synctest` | 1.24 (exp), 1.25 (GA) |
-| `ptr := func[T any](v T) *T { return &v }` | `new(expr)` | 1.26 |
-| `var x *Foo; errors.As(err, &x)` | `errors.AsType[*Foo](err)` | 1.26 |
-
----
-
-## Language Feature Tour
-
-### Go 1.20 (Feb 2023)
-
-- **`errors.Join`** — combine multiple errors into one value; `errors.Is` / `errors.As` walk the tree.
-- **Multi-`%w` `fmt.Errorf`** — `fmt.Errorf("a: %w; b: %w", e1, e2)`.
-
-### Go 1.21 (Aug 2023) — **major quality-of-life release**
-
-```go
-// Builtins
-x := min(a, b, c)       // replaces math.Min in most cases
-y := max(a, b)
-clear(m)                // delete all map keys in one call
-clear(s)                // zero all slice elements
-
-// slices + maps packages
-import "slices"
-slices.Sort(xs)
-slices.Contains(xs, target)
-ys := slices.Clone(xs)
-slices.SortFunc(users, func(a, b User) int { return cmp.Compare(a.Name, b.Name) })
-
-import "maps"
-keys := slices.Collect(maps.Keys(m))     // 1.23+ idiom; see iterators below
-maps.Copy(dst, src)
-
-// log/slog — stdlib structured logging
-import "log/slog"
-slog.Info("request", "method", r.Method, "path", r.URL.Path)
-
-// sync.OnceFunc / OnceValue / OnceValues
-var load = sync.OnceValue(func() *Config {
-    return loadConfigOnce()
-})
-cfg := load()    // runs loader exactly once, concurrency-safe
-
-// cmp.Ordered constraint for generics
-func Max[T cmp.Ordered](a, b T) T { ... }
-```
-
-### Go 1.22 (Feb 2024)
-
-```go
-// Per-iteration loop variables — each iteration gets a new x
-for _, x := range xs {
-    go process(x)   // pre-1.22, this captured the shared x; now each goroutine sees its own
-}
-// Delete any x := x shadow copies in existing code.
-
-// for range N — count without a counter variable
-for range 5 {
-    doThing()
-}
-
-// cmp.Or — fall-through to first non-zero value
-name := cmp.Or(req.Name, user.Name, "anonymous")
-
-// math/rand/v2 — better API, default is ChaCha8 (not deterministic global seed)
-import "math/rand/v2"
-n := rand.IntN(100)
-```
-
-### Go 1.23 (Aug 2024)
-
-```go
-// Range-over-function — iterators are first-class
-func Lines(r io.Reader) iter.Seq[string] {
-    return func(yield func(string) bool) {
-        s := bufio.NewScanner(r)
-        for s.Scan() {
-            if !yield(s.Text()) {
-                return
-            }
-        }
-    }
-}
-
-for line := range Lines(r) {    // consume it like a slice
-    fmt.Println(line)
-}
-
-// iter.Seq2 for key/value iteration
-func Entries[K comparable, V any](m map[K]V) iter.Seq2[K, V] { ... }
-
-// unique package for canonicalization
-import "unique"
-h := unique.Make("repeated string")  // all Make("repeated string") calls share storage
-
-// structs package — control struct memory layout
-import "structs"
-type Header struct {
-    _ structs.HostLayout   // opt in to host-native layout (for FFI / OS structs)
-    Magic uint32
-    Size  uint32
-}
-```
-
-### Go 1.24 (Feb 2025)
-
-```go
-// Generic type aliases
-type Ints = []int                   // was already allowed
-type Pair[K, V any] = struct { K K; V V }   // NEW: generic alias
-
-// go.mod tool directive (replaces tools.go)
-tool github.com/golangci/golangci-lint/cmd/golangci-lint
-// Then: go tool golangci-lint run
-
-// testing.B.Loop — no more b.N book-keeping
-func BenchmarkX(b *testing.B) {
-    for b.Loop() {
-        doWork()
-    }
-}
-
-// t.Context() — test-scoped context, cancelled on t.Cleanup
-func TestThing(t *testing.T) {
-    ctx := t.Context()
-    client.Do(ctx, ...)
-}
-
-// testing/synctest (experimental in 1.24, GA in 1.25)
-// Deterministic fake clock + goroutine scheduling for concurrent code
-synctest.Run(func() {
-    go producer()
-    synctest.Wait()   // until all goroutines block
-    assertState(t)
-})
-
-// Swiss-table map internals — maps are now ~30% faster with no API change
-// weak package — weak pointers for caches
-
-// os.Root — sandboxed filesystem access (no path-traversal escapes)
-root, err := os.OpenRoot("/var/data")
-if err != nil { return err }
-defer root.Close()
-f, err := root.Open("user-upload.txt")   // cannot escape /var/data
-
-// runtime.AddCleanup — safer alternative to SetFinalizer
-runtime.AddCleanup(&obj, func(id uint64) {
-    closeResource(id)
-}, obj.ID)
-```
-
-### Go 1.25 (Aug 2025)
-
-- `testing/synctest` graduated to GA (no more `GOEXPERIMENT=synctest`).
-- Experimental green tea garbage collector (`GOEXPERIMENT=greenteagc`).
-- Container-aware default `GOMAXPROCS` inside Linux cgroups.
-- Runtime trace flight recorder for on-demand tracing in production.
-
-### Go 1.26 (Feb 2026)
-
-```go
-// new() accepts expressions — no more ptr[T] helper
-p := new(42)                        // *int pointing at 42
-deadline := new(time.Now().Add(5 * time.Second))   // *time.Time
-
-// Delete any utility like:
-//   func ptr[T any](v T) *T { return &v }
-// go fix can migrate automatically.
-
-// Recursive generic type parameters — a type parameter can now reference itself
-// in its own constraint, enabling cleaner builder/fluent patterns and self-referencing
-// data structures.
-
-// errors.AsType[T] — type-safe single-expression unwrapping
-if nf, ok := errors.AsType[*NotFoundError](err); ok {
-    log.Println(nf.Resource)
-}
-// Replaces: var nf *NotFoundError; errors.As(err, &nf); if nf != nil { … }
-```
-
-**Green Tea GC** is on by default in Go 1.26 — 10–40% reduction in GC overhead, with an extra ~10% on Intel Ice Lake / AMD Zen 4+. No opt-in required; just upgrade.
-
-**`go fix` was rewritten in Go 1.26** as the canonical home for modernizers. Run `go fix ./...` after every toolchain bump.
-
----
-
-## Upgrade Checklist
-
-When bumping your toolchain:
-
-```bash
-# 1. Clean working tree — you want a reviewable diff
-git status
-
-# 2. Update go directive and toolchain
-go mod edit -go=1.26
-
-# 3. Apply all modernizers
-go fix ./...
-
-# 4. Verify nothing regressed
+git diff
 go test ./...
 go vet ./...
-
-# 5. Review and commit
-git diff
-git commit -m "chore: modernize to Go 1.26 idioms"
 ```
 
-Repeat this after every toolchain bump and after any large AI-generated change.
+Select an analyzer with a flag named after it, or disable one with its boolean flag:
 
----
+```sh
+go fix -diff -any ./...
+go fix -any ./...
+go fix -diff -any=false ./...
+```
 
-## Summary
+Do not use the legacy `-fix=name` syntax to select a current analyzer. On Go 1.27.1 that obsolete flag is ignored with a warning, and the default suite can still modify unrelated code.
 
-- **DO** run `go fix ./...` after every code-gen session and every toolchain upgrade
-- **DO** prefer stdlib (`slices`, `maps`, `slog`, `errors.Join`, `cmp`) over third-party equivalents
-- **DO** target the current Go toolchain; old idioms are a tax, not a compatibility win
-- **DO** use `sync.OnceFunc` / `OnceValue`, not hand-rolled `sync.Once` closures
-- **DO** replace `b.N` benchmark loops with `testing.B.Loop` (1.24+)
-- **DO** use `t.Context()` in tests (1.24+) instead of building a fresh `context.Background`
-- **DO** use `new(expr)` (1.26+) instead of `ptr[T]` helpers
-- **DO** use `errors.AsType[T]` (1.26+) instead of the `var x; errors.As(err, &x)` two-step
-- **DO** use `fmt.Appendf` (1.19+) instead of `[]byte(fmt.Sprintf(…))`
-- **DO** use `strings.Cut` (1.18+) instead of `strings.Index` + slicing
-- **DO** use `os.Root` / `os.OpenRoot` (1.24+) for sandboxed filesystem access
-- **DO** use `runtime.AddCleanup` (1.24+) instead of `runtime.SetFinalizer`
-- **DON'T** reach for `hashicorp/go-multierror` — `errors.Join` exists
-- **DON'T** keep `tools.go` files — migrate to `go.mod` tool directives
-- **DON'T** copy `x := x` shadowing patterns forward — Go 1.22 fixed the underlying issue
-- **DON'T** trust AI-generated Go blindly — frequency bias pulls it toward obsolete patterns
+The Go 1.27.1 suite includes `any`, `forvar`, `errorsastype`, `newexpr`, `stringsseq`, `waitgroupgo`, and other specific analyzers. It does not include a Once conversion, a `tools.go` to tool-directive migration, or `slicesclone`. The `fmtappendf` analyzer present in Go 1.26 was removed in Go 1.27. Treat the installed help as authoritative for selection.
 
----
+Fixers are designed to preserve behavior, but overlapping transformations can require manual repair. A run covers selected packages in the active build configuration and skips fixes touching generated files. Check other supported build tags and platforms when they contain affected code. Change a generator when generated output needs modernization.
 
-## Related Files
+The source-level inliner uses `//go:fix inline` directives for supported API migrations. It only reaches analyzed call sites; it does not guarantee migration of every platform-specific file or every downstream consumer. Preserve public compatibility while consumers update. [Go fix usage and limitations](https://go.dev/blog/gofix)
 
-- [generics.md](generics.md) - Type parameters, constraints, and when to prefer generics
-- [concurrency.md](concurrency.md) - Modern concurrency primitives and `testing/synctest`
-- [test.md](test.md) - `t.Context()`, `testing.B.Loop`, `testing/synctest`
-- [errors.md](errors.md) - `errors.Join`, multi-`%w` wrapping
-- [modules.md](modules.md) - `go.mod` tool directives, workspaces
+## Match replacement semantics
 
-## References
+The table lists candidates, not unconditional substitutions. The version identifies availability, not a requirement to rewrite otherwise suitable code.
 
-- [go fix documentation](https://pkg.go.dev/cmd/go#hdr-Update_packages_to_use_modern_features) - Modernizer command
-- [Go release notes](https://go.dev/doc/devel/release) - Canonical per-version feature list
-- [Go 1.20 release notes](https://go.dev/doc/go1.20) - `errors.Join`, multi-`%w`
-- [Go 1.21 release notes](https://go.dev/doc/go1.21) - `slices`, `maps`, `slog`, `min`/`max`/`clear`
-- [Go 1.22 release notes](https://go.dev/doc/go1.22) - Loop semantics, `for range N`
-- [Go 1.23 release notes](https://go.dev/doc/go1.23) - Iterators, `iter.Seq`
-- [Go 1.24 release notes](https://go.dev/doc/go1.24) - Tool directives, `testing.B.Loop`, generic aliases, `os.Root`, `runtime.AddCleanup`
-- [Go 1.26 release notes](https://go.dev/doc/go1.26) - `new(expr)`, `errors.AsType`, Green Tea GC, revamped `go fix`
-- [Using `go fix` to modernize code](https://go.dev/blog/gofix) - Alan Donovan on the 1.26 modernizer rewrite
-- [log/slog blog post](https://go.dev/blog/slog) - Structured logging rationale
-- [Range-over-func proposal](https://go.dev/blog/range-functions) - Iterator design
-- [go-modern-guidelines (JetBrains)](https://github.com/JetBrains/go-modern-guidelines) - AI-drift mitigation plugin for Claude Code
+| Facility                                 | Since | Conditions to preserve                                                                                                                                                         |
+| ---------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `strings.Cut`                            | 1.18  | Splits at the first separator; check the found result.                                                                                                                         |
+| `fmt.Appendf`                            | 1.19  | Appends to existing bytes and may allocate. Use a fresh destination if the previous code created a fresh result.                                                               |
+| `errors.Join`, multiple `%w`             | 1.20  | Preserve error identity, formatting expectations, and intentional exposure of causes. See [errors.md](errors.md).                                                              |
+| `slices.Sort` / `SortFunc`               | 1.21  | Mutates the slice. Preserve ordering and stability requirements; use stable sorting when required.                                                                             |
+| `slices.Clone` / `maps.Clone`            | 1.21  | Shallow copies. Nilness and references nested inside elements remain part of the contract.                                                                                     |
+| Sort plus `slices.Compact`               | 1.21  | Deduplicates adjacent equal elements after sorting; changes order and storage. A set may still be the right data structure.                                                    |
+| `min` / `max`                            | 1.21  | Floating-point NaN/infinity behavior differs from `math.Min`/`math.Max` in some cases.                                                                                         |
+| `clear`                                  | 1.21  | Clears a map or zeros slice elements. Clearing a map also removes NaN keys that an equality-based delete loop cannot remove.                                                   |
+| `cmp.Ordered`                            | 1.21  | Includes strings and ordered numeric types, not complex numbers or every desired numeric constraint.                                                                           |
+| Once helpers                             | 1.21  | Cache results and errors; repeat panics on later calls, unlike `Once.Do`. See [concurrency.md](concurrency.md).                                                                |
+| `log/slog`                               | 1.21  | Preserve required logging levels, fields, handlers, and output behavior.                                                                                                       |
+| `cmp.Or`                                 | 1.22  | Chooses the first non-zero argument. Arguments are evaluated before the call; this is not lazy fallback evaluation.                                                            |
+| `math/rand/v2`                           | 1.22  | Recheck seeding and reproducibility contracts. Use `crypto/rand` for security-sensitive randomness.                                                                            |
+| Range-over-function, `iter`, `maps.Keys` | 1.23  | Define errors, order, lifetime, restartability, and mutation. Map iteration does not promise order.                                                                            |
+| `unique.Make`                            | 1.23  | Canonicalizes comparable values through handles. Measure benefits and keep handle/value lifetime semantics clear.                                                              |
+| `structs.HostLayout`                     | 1.23  | Requests host ABI layout; it is not a field-packing optimizer and does not recursively change other struct layouts.                                                            |
+| Generic aliases, tool directives         | 1.24  | Aliases preserve type identity; tool directives change module dependency management.                                                                                           |
+| `strings.SplitSeq` / `FieldsSeq`         | 1.24  | Useful when only traversal is needed; a materialized slice can suit repeated access better.                                                                                    |
+| `t.Context`, `B.Loop`                    | 1.24  | Preserve cancellation timing, worker joins, and the benchmark's measurement unit. See [test.md](test.md).                                                                      |
+| `os.Root`                                | 1.24  | Provides traversal-resistant directory-relative operations, not a complete process sandbox. Follow platform and resource-lifetime contracts.                                   |
+| `runtime.AddCleanup`                     | 1.24  | Cleanup may be delayed or never run before process exit. Avoid retaining the object through the cleanup closure or argument; use explicit close for bounded resource lifetime. |
+| Stable `synctest.Test`                   | 1.25  | Use the bubble's durable-blocking rules; fake time does not repair arbitrary races or external I/O timing.                                                                     |
+| `WaitGroup.Go`                           | 1.25  | Joins callbacks that must not panic; adds neither cancellation nor error propagation.                                                                                          |
+| `new(expr)`, `errors.AsType`             | 1.26  | Initialized pointers and typed error extraction; preserve the operation's data and error contracts.                                                                            |
+
+One small counterexample explains why numerical replacements need care:
+
+```go
+package example
+
+import (
+	"fmt"
+	"math"
+)
+
+func Example() {
+	negativeInfinity, nan := math.Inf(-1), math.NaN()
+	fmt.Println(math.Min(negativeInfinity, nan))
+	fmt.Println(min(negativeInfinity, nan))
+	// Output:
+	// -Inf
+	// NaN
+}
+```
+
+Similarly, `slices.Clone` of a nil slice stays nil, whereas appending it to a non-nil empty slice produces a non-nil result. Preserve observable nilness when serialization or callers distinguish it. These are API semantics, not reasons to avoid modern functions when their behavior fits.
+
+## Loop semantics since Go 1.22
+
+The change gives variables declared by the loop a distinct instance each iteration. It matters when retaining an address or capturing a variable in a closure. Variables declared outside the loop and assigned with `=` are still shared.
+
+```go
+package example
+
+import "fmt"
+
+func Example() {
+	var declared []func() int
+	for _, value := range []int{1, 2, 3} {
+		declared = append(declared, func() int { return value })
+	}
+
+	var assigned []func() int
+	var value int
+	for _, value = range []int{1, 2, 3} {
+		assigned = append(assigned, func() int { return value })
+	}
+
+	fmt.Println(declared[0](), declared[1](), declared[2]())
+	fmt.Println(assigned[0](), assigned[1](), assigned[2]())
+	// Output:
+	// 1 2 3
+	// 3 3 3
+}
+```
+
+With the older language semantics, the first row would also be `3 3 3`. By contrast, `go process(value)` evaluates `value` before the goroutine begins, including before Go 1.22. Remove shadow copies only where they are redundant under the effective language version and the actual capture pattern; the `forvar` analyzer handles eligible cases.
+
+## Stable Go 1.27 additions
+
+Generic methods can declare their own type parameters; interface methods cannot. The complete example and restriction are in [generics.md](generics.md). `go test` also runs the `stdversion` vet check by default, reinforcing the distinction between the installed compiler and a module's declared API baseline. [Go 1.27 release notes](https://go.dev/doc/go1.27)
+
+`encoding/json/v2` and `encoding/json/jsontext` are stable in Go 1.27. v2 uses stricter defaults, including rejecting duplicate object names and invalid UTF-8. v1 remains supported. A migration must account for data compatibility and the behavior options, rather than replacing an import mechanically. [JSON v2 API](https://pkg.go.dev/encoding/json/v2@go1.27.1)
+
+```go
+package example
+
+import (
+	jsonv1 "encoding/json"
+	jsonv2 "encoding/json/v2"
+	"fmt"
+)
+
+func Example() {
+	input := []byte(`{"name":"first","name":"second"}`)
+	var legacy, strict map[string]string
+	oldErr := jsonv1.Unmarshal(input, &legacy)
+	newErr := jsonv2.Unmarshal(input, &strict)
+	fmt.Println(oldErr == nil, newErr != nil)
+	// Output: true true
+}
+```
+
+For tests, `synctest.Sleep` combines fake sleep and waiting for quiescence, and `httptest.NewTestServer` offers an in-memory network suitable for synctest. See [test.md](test.md).
+
+The stable `goroutineleak` profile identifies a class of permanently blocked goroutines through reachability analysis. It can miss leaks whose blocking objects remain reachable, so it supplements lifecycle design and tests rather than proving their completeness. [Go 1.27 runtime changes](https://go.dev/doc/go1.27#runtime)
+
+## Performance and experimental work
+
+Go 1.26 enabled the Green Tea garbage collector by default. Go 1.27 adds allocation improvements. Treat published benchmark percentages as workload-dependent observations; measure the application before promising a benefit. [Go 1.26 runtime changes](https://go.dev/doc/go1.26#runtime), [Go 1.27 runtime changes](https://go.dev/doc/go1.27#runtime)
+
+As of 14 September 2026, portable `simd` remains experimental behind `GOEXPERIMENT=simd`. Keep experimental APIs separate from a stable compatibility promise. [SIMD experiment](https://go.dev/doc/go1.27)
+
+For a 2027 planning horizon, follow Go 1.28 development and subsequent release notes. The six-month release cadence suggests February and August release windows, not guaranteed feature dates. Extensible analyzer sidecars remain an open backlog item; do not document them as installed `go fix` functionality. [Release cycle](https://go.dev/wiki/Go-Release-Cycle), [Go 1.28 development](https://github.com/golang/go/issues/79581), [analysis-sidecar discussion](https://github.com/golang/go/issues/59869)
+
+Related guidance: [modules](modules.md), [quality](quality.md), and the versioned [source catalog](resources.md).
