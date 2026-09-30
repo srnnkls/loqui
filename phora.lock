@@ -44,16 +44,16 @@ config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd635
 name = "redb"
 git = "https://github.com/cberner/redb.git"
 resolved = "master"
-commit = "8f08680d3d40f2a030a59ae815b7e763ea6c70d9"
-digest = "blake3:8e69af727d7f4216c54786a43d3c8c89c88ac789c99ad1a29992bdad10b04c43"
+commit = "207c6f2343e46f900534a60cb39becc332e3dc1a"
+digest = "blake3:31677c66ce28e624c4af5b653b1b2f9b3a2b140801d71e2de7b0721def8a23d4"
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
 name = "patterns"
 git = "https://github.com/rust-unofficial/patterns.git"
 resolved = "main"
-commit = "f279f3541c37f3cc36ac6c95ba09465c70ad5271"
-digest = "blake3:1c66015957037dd82c4c1390e876fa99caa305bb6c3f2f1b6c822becdcb8d6d9"
+commit = "36fdd17cdebfffd7af94479a4caa9375e40bde80"
+digest = "blake3:109146ffe45701e01f05aabe1c39c58ddc1c904bd721ac21df5ac552da8da267"
 config_digest = "blake3:c3df8c4cfc72dcbfd6bd01a8aeb59cd06150db7f8dd926b37ffadd19be9bc9de"
 
 [[sources]]
@@ -84,8 +84,8 @@ config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd635
 name = "tokio"
 git = "https://github.com/tokio-rs/tokio.git"
 resolved = "master"
-commit = "2025ddd83c1466b81f25d0be50f5334b620c51c3"
-digest = "blake3:efc59ad3fede1adb64488a04ebe39f1fcb2542b6292bd3bf0aadaaa22f69bf51"
+commit = "e6e84a4d4a5e11d5d0f419444a634ee07203b3e5"
+digest = "blake3:15db06fd0bc66ed49180c00095c6d694e373426f0765ca650d4270a427ae5421"
 config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd6359cb1ee63"
 
 [[sources]]
@@ -108,6 +108,6 @@ config_digest = "blake3:7b7015bb92cf0b318037702a6cdd81dee41224f734684c2c122cd635
 name = "serde"
 git = "https://github.com/serde-rs/serde.git"
 resolved = "master"
-commit = "a874a1b1bb1cc16cf5ee3b1b7b527af5705742bb"
-digest = "blake3:93da97b35e665188b04d2f9ab8184a6e7b7102a9128792ea4b41bfa17e26ae00"
+commit = "6693a89cca77e0151437da1c7f890090b9ebf04c"
+digest = "blake3:c9deac76714939e43dc691c8debfe1f2a631a74f195a3b91ce3197108b34bffe"
 config_digest = "blake3:775395012a8f10f73bdea302b471d9cf0dcb5a649c303193e79957d823fd90a0"

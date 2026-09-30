@@ -1,5 +1,3 @@
-version = 1
-
 [sources.python-testing-with-pytest]
 repo = "jashburn8020/python-testing-with-pytest"
 branch = "master"
