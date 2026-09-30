@@ -4,449 +4,137 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Errors
 
-Error handling, Result types, propagation patterns, and panic guidelines.
+Use `Result<T, E>` for expected failures and expose enough information for callers to decide what to do. Use `Option<T>` when absence is the entire contract. Treat panic conditions, recovery, and partial effects as parts of the API.
 
-## Core Guidelines
+## Expected Failures and Context
 
-### Result is the Default
-
-**Use `Result<T, E>` for all fallible operations.**
+User input, file access, and network operations can fail during normal use. Propagate those failures rather than turning them into unexplained panics. Add context where it identifies the failed operation or resource; bare `?` is appropriate when the error already carries the needed information.
 
 ```rust
-// ✓ CORRECT: Return Result for fallible operations
-fn load_config(path: &Path) -> Result<Config, ConfigError> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => return Err(ConfigError::Io { path: path.to_owned(), source: e }),
-    };
-
-    let config: Config = toml::from_str(&content)
-        .map_err(|e| ConfigError::Parse { source: e })?;
-
-    validate(&config)?;
-    Ok(config)
-}
-
-// ✘ WRONG: Unwrap in library code
-fn load_config_bad(path: &Path) -> Config {
-    let content = fs::read_to_string(path).unwrap();  // Panics on error
-    toml::from_str(&content).unwrap()
-}
-```
-
-Never `.unwrap()` or `.expect()` in library code. Let callers decide how to handle errors.
-
-### Add Context When Propagating Errors
-
-**Add context at boundaries. Use bare `?` when the error type already carries enough context or the call site is unambiguous.**
-
-```rust
-// ✘ PROBLEMATIC: Bare ? at a boundary loses context
-fn process_file(path: &Path) -> Result<Data, Error> {
-    let content = fs::read_to_string(path)?;  // Which file failed?
-    let parsed = parse(&content)?;            // Parse of what?
-    let validated = validate(parsed)?;        // Validation of what?
-    Ok(validated)
-}
-
-// ✓ CORRECT: Add context with .map_err()
-fn process_file(path: &Path) -> Result<Data, Error> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| Error::ReadFile { path: path.to_owned(), source: e })?;
-
-    let parsed = parse(&content)
-        .map_err(|e| Error::Parse { source: e })?;
-
-    let validated = validate(parsed)
-        .map_err(|e| Error::Validation { source: e })?;
-
-    Ok(validated)
-}
-
-// ✓ ALSO GOOD: Match for complex handling
-fn process_file(path: &Path) -> Result<Data, Error> {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            return Ok(Data::default());  // Special case: missing file is OK
-        }
-        Err(e) => return Err(Error::ReadFile { path: path.to_owned(), source: e }),
-    };
-    // ...
-}
-```
-
-**Decision table for error propagation:**
-
-| Context | Approach | Example |
-|---------|----------|---------|
-| **App code + anyhow** | `?` with `.context()` / `.with_context()` | `fs::read(p).context("reading config")?` |
-| **Library + thiserror** | Bare `?` if the error already carries context | `parse(s)?` where `ParseError` includes details |
-| **Library + generic error** | `.map_err()` to add context | `.map_err(\|e\| Error::Io { path, source: e })?` |
-| **Need to recover** | `match` for specific variants | `match result { Err(e) if recoverable => ... }` |
-| **Internal helpers** | Bare `?` is fine | Helper name/call site provides context; usually a single, local usage |
-
-**When bare `?` is acceptable:**
-- Error type has `From` impls that preserve context (see [Error Handling in Rust](https://burntsushi.net/rust-error-handling/))
-- Internal helper functions where context is obvious
-- With `.context()` from `anyhow` in application code
-
-**When to use `match` or `.map_err()`:**
-- Different error variants need different handling
-- You want to recover from specific errors
-- You need to add context (path, operation, input value)
-
-### Create Meaningful Error Types
-
-**Never use `()` as an error type. Implement `std::error::Error`.**
-
-```rust
-// ✓ CORRECT: Meaningful error type with context
-#[derive(Debug)]
-pub enum ConfigError {
-    Io { path: PathBuf, source: std::io::Error },
-    Parse { source: toml::de::Error },
-    Validation(String),
-}
-
-impl std::fmt::Display for ConfigError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io { path, source } => write!(f, "failed to read {}: {source}", path.display()),
-            Self::Parse { source } => write!(f, "invalid config format: {source}"),
-            Self::Validation(msg) => write!(f, "config validation failed: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for ConfigError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::Parse { source } => Some(source),
-            Self::Validation(_) => None,
-        }
-    }
-}
-
-// ✘ WRONG: Unit error type
-fn do_thing() -> Result<Value, ()> {
-    // Caller has no information about what went wrong
-}
-```
-
-Use `thiserror` crate to reduce boilerplate for error type definitions.
-
-### Error Messages are Lowercase
-
-**Error messages should be lowercase without trailing punctuation.**
-
-```rust
-// ✓ CORRECT: Lowercase, no punctuation
-impl Display for MyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "resource not found"),
-            Self::InvalidInput(s) => write!(f, "invalid input: {s}"),
-            Self::Timeout { after } => write!(f, "operation timed out after {after:?}"),
-        }
-    }
-}
-
-// ✘ WRONG: Capitalized with punctuation
-impl Display for BadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Resource not found.")  // Wrong style
-    }
-}
-```
-
-This convention allows error messages to be chained naturally: "failed to connect: connection refused".
-
-### Document Errors, Panics, and Safety
-
-**Use `# Errors`, `# Panics`, `# Safety` sections in rustdoc.**
-
-```rust
-/// Loads configuration from the given path.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The file cannot be read
-/// - The file contains invalid TOML
-/// - Required fields are missing
-///
-/// # Panics
-///
-/// Panics if `path` is empty (programmer error).
-pub fn load_config(path: &Path) -> Result<Config, ConfigError> {
-    assert!(!path.as_os_str().is_empty(), "path cannot be empty");
-    // ...
-}
-
-/// Converts bytes to a string without checking validity.
-///
-/// # Safety
-///
-/// The caller must ensure that `bytes` contains valid UTF-8.
-pub unsafe fn bytes_to_str_unchecked(bytes: &[u8]) -> &str {
-    std::str::from_utf8_unchecked(bytes)
-}
-```
-
-### Bugs vs Errors: The Core Distinction
-
-**Errors are expected. Bugs are not. This determines your handling strategy.**
-
-| | Errors | Bugs |
-|---|--------|------|
-| **What** | Expected failure modes | Programming mistakes |
-| **Examples** | File not found, network timeout, invalid input | Invariant violations, impossible states |
-| **Handling** | `Result<T, E>` | `panic!`, `assert!`, `unwrap` |
-| **Recovery** | Caller decides | Fix the code |
-
-```rust
-// ERROR: File might not exist - expected, recoverable
-fn load_config(path: &Path) -> Result<Config, ConfigError> {
-    let content = fs::read_to_string(path)?;  // Returns Err if missing
-    // ...
-}
-
-// BUG: Index out of bounds - programming mistake
-fn get_item(items: &[Item], index: usize) -> &Item {
-    assert!(index < items.len(), "index out of bounds");  // Panic is correct
-    &items[index]
-}
-
-// BUG: Impossible state reached
-fn process(state: State) {
-    match state {
-        State::Ready => { /* ... */ }
-        State::Done => { /* ... */ }
-        State::Invalid => unreachable!("invalid state should never occur"),
-    }
-}
-
-// ✘ WRONG: Treating an error as a bug
-fn connect(url: &str) -> Connection {
-    match try_connect(url) {
-        Ok(conn) => conn,
-        Err(e) => panic!("connection failed: {e}"),  // Network failure is expected!
-    }
-}
-```
-
-See [Unwrap and Expect (BurnSushi)](https://burntsushi.net/unwrap/) for the full discussion.
-
-### When `unwrap`/`expect` is Acceptable
-
-**Use `unwrap`/`expect` when failure indicates a bug, not an error.**
-
-```rust
-// ✓ OK: Invariant guaranteed by prior check
-let value = map.get(&key).unwrap();  // We just inserted this key
-
-// ✓ OK: Type system can't express the guarantee
-let regex = Regex::new(r"^\d+$").unwrap();  // Literal regex, compile-time correct
-
-// ✓ OK: Test code (panic = clear test failure)
-#[test]
-fn test_parse() {
-    let result = parse("valid input").unwrap();
-    assert_eq!(result.value, 42);
-}
-
-// ✓ OK: Quick scripts and prototyping
-fn main() {
-    let config = load_config("config.toml").unwrap();  // You're the only user
-}
-
-// ✓ OK: Doc examples (see quality.md for house style)
-/// ```
-/// let result = parse("input").unwrap();  // Focus on the API, not error handling
-/// ```
-
-// ✘ WRONG: User-provided input might fail
-fn parse_user_input(input: &str) -> Value {
-    serde_json::from_str(input).unwrap()  // Should return Result!
-}
-
-// ✘ WRONG: External resource might not exist
-fn read_config() -> Config {
-    let content = fs::read_to_string("config.toml").unwrap();  // Should return Result!
-    toml::from_str(&content).unwrap()
-}
-```
-
-**The question to ask:** "If this fails, is it a bug in my code or an expected error?"
-
-### Validate Arguments Statically When Possible
-
-**Prefer type-level validation over runtime checks.**
-
-```rust
-// ✓ CORRECT: Static validation via newtype
-pub struct NonEmptyString(String);
-
-impl NonEmptyString {
-    pub fn new(s: String) -> Result<Self, EmptyStringError> {
-        if s.is_empty() {
-            Err(EmptyStringError)
-        } else {
-            Ok(Self(s))
-        }
-    }
-}
-
-// Function can't receive empty string
-fn greet(name: &NonEmptyString) {
-    println!("Hello, {}!", name.0);
-}
-
-// ✘ WRONG: Runtime validation everywhere
-fn greet_bad(name: &str) -> Result<(), Error> {
-    if name.is_empty() {
-        return Err(Error::EmptyName);  // Checked in every function
-    }
-    println!("Hello, {name}!");
-    Ok(())
-}
-```
-
-Push validation to boundaries. Once data is validated, use types that guarantee validity.
-
-### Provide `_unchecked` Variants for Hot Paths
-
-**Offer opt-out validation for performance-critical code.**
-
-```rust
-impl Ascii {
-    /// Creates an Ascii from a byte, returning an error if invalid.
-    pub fn new(byte: u8) -> Result<Self, AsciiError> {
-        if byte.is_ascii() {
-            Ok(Self(byte))
-        } else {
-            Err(AsciiError(byte))
-        }
-    }
-
-    /// Creates an Ascii from a byte without checking validity.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `byte` is a valid ASCII value (< 128).
-    pub unsafe fn new_unchecked(byte: u8) -> Self {
-        debug_assert!(byte.is_ascii());
-        Self(byte)
-    }
-}
-```
-
-The `_unchecked` variant should still use `debug_assert!` to catch errors in development.
-
-### `thiserror` vs `anyhow` — Choose by Caller Intent
-
-**The decision is not "library vs application" — it's what the caller will do with the error.**
-
-| Will callers… | Use | Why |
-|---|---|---|
-| `match` on error variants? | `thiserror` | Give them a typed enum they can pattern-match on |
-| just log or propagate? | `anyhow` | An opaque type with `.context()` is enough; save the boilerplate |
-| both (domain + infra)? | `thiserror` for domain errors; `anyhow` at entry points | Domain code yields typed errors; binaries/tests swallow with `?` |
-
-Most libraries want `thiserror` because their callers genuinely need to distinguish cases. Most binaries want `anyhow` at entry points because nobody matches on `main()`'s return. The split is by **who reads the error**, not by Cargo target type.
-
-**Choose error handling approach based on context.**
-
-```rust
-// ✓ Library code: thiserror for structured errors
+use std::{num::ParseIntError, path::{Path, PathBuf}};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum DatabaseError {
-    #[error("connection failed: {0}")]
-    Connection(#[from] std::io::Error),
-
-    #[error("query failed: {0}")]
-    Query(String),
-
-    #[error("record not found: {id}")]
-    NotFound { id: u64 },
+enum LoadError {
+    #[error("failed to read {path:?}: {source}")]
+    Read { path: PathBuf, source: std::io::Error },
+    #[error("invalid count in {path:?}: {source}")]
+    Parse { path: PathBuf, source: ParseIntError },
 }
 
-// ✓ Application code: anyhow with context
-use anyhow::{Context, Result};
-
-fn main() -> Result<()> {
-    // In application code, ? with .context() is acceptable
-    // because anyhow captures backtraces and context is added
-    let config = load_config()
-        .context("failed to load configuration")?;
-
-    let db = connect(&config.db_url)
-        .with_context(|| format!("failed to connect to {}", config.db_url))?;
-
-    Ok(())
+fn load_count(path: &Path) -> Result<u32, LoadError> {
+    let text = std::fs::read_to_string(path).map_err(|source| LoadError::Read {
+        path: path.to_owned(), source,
+    })?;
+    text.trim().parse().map_err(|source| LoadError::Parse {
+        path: path.to_owned(), source,
+    })
 }
 ```
 
-- **Libraries**: Use `thiserror` - structured errors, callers match on variants
-- **Applications**: Use `anyhow` with `.context()` - `?` is acceptable here because context is preserved
+`thiserror` exposes a field named `source` through the standard error chain. Use `match` when variants need different handling, and avoid flattening useful typed information into a string before the caller has made that choice.
 
-**`thiserror` 2.0 (mid-2024):** slimmer dependency tree, supports disjoint `From` impls, better `#[from]` diagnostics. Upgrade across the board.
+Do not include secrets merely to provide context. Keep message wording compatible with the outer reporting layer so source errors are not printed twice when that layer also walks the chain.
 
-### Suppress Misleading Trait-Impl Suggestions with `#[diagnostic::do_not_recommend]` (Rust 1.85+)
+## Choose Error Types by Caller Needs
 
-When a blanket trait impl causes the compiler to suggest implementing an unrelated trait, `#[diagnostic::do_not_recommend]` hides it from diagnostics.
+| Caller need                              | Suitable approach                                                       |
+| ---------------------------------------- | ----------------------------------------------------------------------- |
+| Match on recovery cases                  | A typed error, implemented manually or with `thiserror`                 |
+| Report an operation failure with context | An opaque report such as `anyhow::Error` can suffice                    |
+| Represent one named failure              | A small named error type may be clearer than an enum                    |
+| Distinguish no failure details           | Consider whether `Option` or a predicate better describes the operation |
+
+Libraries commonly expose typed errors and application entry points commonly collect reports, but the target type alone does not decide the contract. Public errors usually benefit from `Debug`, `Display`, and `std::error::Error`; avoid `Result<T, ()>` when it deprives callers of useful information.
 
 ```rust
-#[diagnostic::do_not_recommend]
-impl<T: InternalOnly> MyPublicTrait for T { … }
+use anyhow::{Context, Result};
+use std::path::Path;
+
+fn read_settings(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read settings from {}", path.display()))
+}
 ```
 
-Particularly useful on library error types with complex `From` chains, where naive suggestions can send users down wrong paths.
+`anyhow` still permits downcasting, but callers depending on specific variants are generally better served by an explicit typed API. See [`thiserror`](https://docs.rs/thiserror/) and [`anyhow`](https://docs.rs/anyhow/).
 
-## Summary
+## Recovery and Partial Effects
 
-**Bugs vs Errors:**
-- **Errors** (expected failures) → `Result<T, E>`
-- **Bugs** (programming mistakes) → `panic!`, `assert!`, `unwrap`
+Consider returning an owned input on failure if it remains available and callers can reuse it. [Tokio's channel errors](../../resources/languages/rust/tokio/tokio/src/sync/mpsc/error.rs) preserve unsent values; `String::from_utf8` preserves invalid bytes:
 
-**Error handling:**
-- **DO** return `Result` for operations that can fail expectedly
-- **DO** add context when propagating errors (path, operation, input)
-- **DO** use `.map_err()` or `match` to add context before `?`
-- **DO** implement `std::error::Error` for error types
-- **DO** use `thiserror` for library error types
-- **DO** use `anyhow` with `.context()` in application code
-- **NEVER** use `()` as an error type
+```rust
+let bytes = vec![0xff];
+let error = String::from_utf8(bytes).unwrap_err();
+assert_eq!(error.into_bytes(), [0xff]);
+```
 
-**Panicking:**
-- **DO** use `unwrap`/`expect` when failure indicates a bug
-- **DO** use `unwrap` in tests and quick scripts
-- **DON'T** use `unwrap` for user input, files, or network (these are errors, not bugs)
+This is useful recovery, not a universal rule. Partial consumption, mutation, error size, or sensitive contents can make retaining the input inappropriate. A retry also needs to account for operations that may already have taken effect.
 
-**Style:**
-- **DO** write error messages lowercase without trailing punctuation
-- **DO** document errors with `# Errors` section
+[redb's `WriteTransaction::commit(self)`](../../resources/languages/rust/redb/src/transactions.rs) consumes the transaction. Its documented commit failures distinguish a poisoned transaction from other failures where changes may already have become durable. An error alone does not imply rollback or make blind retry safe. Read the specific operation's contract before deciding whether it should return its input or be retried.
 
----
+For async APIs, cancellation may differ from a returned error: a canceled send future can drop its message, and canceled I/O can leave partial progress. See [async I/O](async-io.md#deadlines-and-cancellation).
+
+## When `unwrap`/`expect` is Acceptable
+
+An invariant-backed panic can be appropriate in library code. Prefer `expect` when its message explains why failure would indicate a bug:
+
+```rust
+use std::collections::HashMap;
+
+let mut values = HashMap::new();
+values.insert("answer", 42);
+let answer = values.get("answer").expect("the key was inserted above");
+assert_eq!(*answer, 42);
+```
+
+Other common uses include assertions in tests, known-valid documentation examples, and short local scripts where terminating is the intended failure policy. A literal regex is still checked at runtime by `Regex::new`; its being a literal is an invariant to test, not compile-time validation by that API.
+
+A public panic condition should be documented. Do not classify ordinary malformed input as a programming bug merely to avoid returning an error. The [Rust Book's panic guidance](../../resources/languages/rust/rust-book/src/ch09-03-to-panic-or-not-to-panic.md) distinguishes recoverable failures, examples, and invariant assumptions.
+
+Unwinding is not guaranteed in every build; `panic = "abort"` changes that behavior. `catch_unwind` cannot recover from aborting panics, and `AssertUnwindSafe` does not itself catch anything.
+
+## Document Errors, Panics, and Safety
+
+Explain observable failure behavior, including whether an operation has changed state when it returns an error:
+
+```rust
+/// Parses an unsigned decimal count.
+///
+/// # Errors
+/// Returns a parse error for invalid syntax or values outside u32's range.
+pub fn parse_count(text: &str) -> Result<u32, std::num::ParseIntError> {
+    text.parse()
+}
+
+assert_eq!(parse_count("42").unwrap(), 42);
+assert!(parse_count("-1").is_err());
+```
+
+Use `# Panics` for public panic conditions and `# Safety` for unsafe caller obligations. Keep the implementation's unsafe operations in explicit blocks; see [unsafe](unsafe.md). A safety section cannot make hidden obligations acceptable on a safe function.
+
+## Validate Once, Preserve the Invariant
+
+Validated types can move repeated checks to a boundary, provided their constructors, mutation methods, and deserialization preserve the invariant. Prefer that to adding unchecked APIs by default.
+
+An `_unchecked` API is justified only when its omitted checks and safety or logical obligations are precise, and a real use case needs it. If safe callers could cause undefined behavior by violating the precondition, the function must be unsafe. A `debug_assert!` is a diagnostic aid, not a release-mode proof. Measure before increasing the unsafe surface for performance.
+
+## Diagnostic Quality
+
+Use actionable messages, usually lowercase without trailing punctuation when chaining. Where a blanket implementation produces misleading compiler suggestions, `#[diagnostic::do_not_recommend]` can suppress recommendations involving that implementation; it does not change trait resolution:
+
+```rust
+trait Internal {}
+trait Public {}
+
+#[diagnostic::do_not_recommend]
+impl<T: Internal> Public for T {}
+```
 
 ## Related
 
-- [types.md](types.md) - Designing types that prevent invalid states
-- [ownership.md](ownership.md) - Returning consumed arguments in errors
-- [async-io.md](async-io.md) - Error handling in async contexts
-
-## References
-
-- [Error Handling in Rust (BurnSushi)](https://burntsushi.net/rust-error-handling/) - Comprehensive guide by ripgrep author
-- [Unwrap and Expect (BurnSushi)](https://burntsushi.net/unwrap/) - When panicking is appropriate
-- [thiserror vs anyhow (Luca Palmieri)](https://www.lpalmieri.com/posts/error-handling-rust/) - Caller-intent framing
-- [Rust API Guidelines: Error Types](https://rust-lang.github.io/api-guidelines/interoperability.html#c-good-err)
-- [Rust API Guidelines: Dependability](https://rust-lang.github.io/api-guidelines/dependability.html)
-- [thiserror crate](https://docs.rs/thiserror/)
-- [anyhow crate](https://docs.rs/anyhow/)
-- [`#[diagnostic::do_not_recommend]` — Rust 1.85 notes](https://blog.rust-lang.org/2025/02/20/Rust-1.85.0.html)
-- [Error Handling in Rust](https://doc.rust-lang.org/book/ch09-00-error-handling.html)
+- [Ownership](ownership.md): recoverable inputs and transfer semantics
+- [Types](types.md): validated values
+- [Async I/O](async-io.md): cancellation and retry policy
+- [API Guidelines: error types](../../resources/languages/rust/api-guidelines/src/interoperability.md)
+- [Source catalog](resources.md): Tokio and redb contracts

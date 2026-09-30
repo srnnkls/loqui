@@ -4,403 +4,140 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Modules
 
-Crate structure, visibility, public APIs, and organization patterns.
+Organize code around responsibilities and dependency boundaries. Prefer a small public interface and keep implementation details private. Domain-oriented modules often help, while technical modules such as parsers, storage engines, or protocol adapters can also be coherent boundaries.
 
-## Core Guidelines
+## Modules and Crates
 
-### Feature-Based Organization
+Keep related types and operations together. Use a separate crate when it provides a meaningful dependency, reuse, publication, or build boundary; avoid splitting solely to hit an arbitrary size limit.
 
-**Organize by domain, not technical layer.**
+[ripgrep's crates](../../resources/languages/rust/ripgrep/crates) separate matching, searching, printing, and directory traversal. Those are distinct responsibilities within one tool, not a rule that every application should copy the same layout.
 
-```
-# ✓ CORRECT: Feature-based
-src/
-├── lib.rs
-├── auth/
-│   ├── mod.rs
-│   ├── token.rs
-│   └── session.rs
-├── storage/
-│   ├── mod.rs
-│   ├── memory.rs
-│   └── disk.rs
-└── api/
-    ├── mod.rs
-    └── handlers.rs
+Both `foo.rs` with a `foo/` directory and `foo/mod.rs` are valid module layouts. Keep the local convention consistent and avoid unnecessary nesting. A small crate can remain mostly in `lib.rs` until its responsibilities justify splitting.
 
-# ✘ WRONG: Layer-based
-src/
-├── lib.rs
-├── models/
-│   ├── auth.rs
-│   └── storage.rs
-├── services/
-│   ├── auth.rs
-│   └── storage.rs
-└── handlers/
-    ├── auth.rs
-    └── storage.rs
-```
+## Visibility and Public API
 
-Related types, traits, and functions stay together.
-
-### Use `pub(crate)` for Internal APIs
-
-**Hide implementation details. Expose only what's needed.**
+Default to private items. Use `pub(super)` or `pub(crate)` for intended internal access, and re-export selected public types from a convenient entry point:
 
 ```rust
-// ✓ CORRECT: Explicit visibility levels
-pub struct Client {
-    // Public field (rare, usually avoided)
-    pub config: Config,
-
-    // Crate-internal
-    pub(crate) connection: Connection,
-
-    // Module-private (default)
-    buffer: Vec<u8>,
+mod identifiers {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UserId(pub u64);
 }
 
-pub fn connect(url: &str) -> Result<Client, Error> {
-    // Public API
-}
-
-pub(crate) fn validate_url(url: &str) -> bool {
-    // Internal helper, not part of public API
-}
-
-fn parse_response(data: &[u8]) -> Response {
-    // Private to this module
-}
+pub use identifiers::UserId;
 ```
 
-### Explicit Public API with Reexports
+A private module can contain a re-exported public item. Conversely, `#[doc(hidden)]` only hides documentation; it does not make a public item private or exempt it from compatibility obligations. Exported macro helpers sometimes need public visibility, so design that support surface deliberately.
 
-**Define your public API explicitly in `lib.rs`.**
-
-```rust
-// lib.rs
-mod auth;
-mod storage;
-mod error;
-
-// Public API - explicitly reexported
-pub use auth::{Token, Session, authenticate};
-pub use storage::{Storage, MemoryStorage, DiskStorage};
-pub use error::{Error, Result};
-
-// Internal modules not reexported - hidden from users
-```
-
-Users import from the crate root, not internal module paths.
-
-### Future-Proof Public APIs
-
-**Use `#[non_exhaustive]` and sealed traits to allow evolution.**
+Use `#[non_exhaustive]` when callers should allow future variants or fields. It has concrete construction and matching consequences outside the crate:
 
 ```rust
-use std::time::Duration;
-
-// ✓ CORRECT: Non-exhaustive enum allows adding variants
 #[non_exhaustive]
-pub enum Error {
-    NotFound,
-    PermissionDenied,
-    // Future: can add variants without breaking downstream
-}
-
-// ✓ CORRECT: Non-exhaustive struct allows adding fields
-#[non_exhaustive]
-pub struct Config {
-    pub timeout: Duration,
-    pub retries: u32,
-    // Future: can add fields without breaking downstream
-}
-
-impl Config {
-    // Provide constructor since struct literals won't work externally
-    pub fn new(timeout: Duration) -> Self {
-        Self { timeout, retries: 3 }
-    }
-}
-
-// ✓ CORRECT: Sealed trait prevents external implementations
-mod private {
-    pub trait Sealed {}
-}
-
-pub trait Backend: private::Sealed {
-    fn execute(&self, query: &str) -> Result<(), Error>;
-}
-
-// Only types in this crate can implement Backend
-pub struct PostgresBackend;
-impl private::Sealed for PostgresBackend {}
-impl Backend for PostgresBackend {
-    fn execute(&self, _query: &str) -> Result<(), Error> { Ok(()) }
+pub enum ConnectionError {
+    Closed,
+    TimedOut,
 }
 ```
 
-| Pattern | Use When |
-|---------|----------|
-| `#[non_exhaustive]` enum | Public error types, status codes, options |
-| `#[non_exhaustive]` struct | Configuration, options with future expansion |
-| Sealed trait | Trait where you control all implementations |
+Downstream matches need a wildcard arm. A non-exhaustive struct cannot be constructed with a struct literal outside its defining crate, so provide constructors as needed. Sealed traits are another targeted evolution tool; see [traits](traits.md#sealing-and-evolution).
 
-### Prefer Small, Focused Crates
+## Workspace Inheritance
 
-**Single responsibility. Easy to understand and test.**
+Declare shared package metadata, dependencies, and lints at the root. A virtual workspace needs an explicit resolver; edition inheritance does not choose one:
 
 ```toml
-# ✓ CORRECT: Workspace with focused crates
+# Root Cargo.toml: a virtual workspace, with no [package].
 [workspace]
-members = [
-    "core",       # Domain types and traits
-    "storage",    # Storage implementations
-    "api",        # HTTP API
-    "cli",        # Command-line interface
-]
+members = ["library", "cli"]
+resolver = "3"
 
-# Each crate has clear boundaries and minimal dependencies
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 ```
 
-Benefits:
-- Parallel compilation
-- Clear dependency boundaries
-- Easier to test in isolation
-- Can be published separately
+Each member opts into the settings it inherits:
 
-### Contain Unsafe in Small Modules
+```toml
+# library/Cargo.toml
+[package]
+name = "example-library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
-**Isolate unsafe code. Provide safe abstractions.**
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
 
-```rust
-// safe_wrapper.rs - minimal unsafe surface
-mod raw {
-    //! Unsafe internals - do not use directly
-
-    pub(super) unsafe fn dangerous_operation(ptr: *mut u8) {
-        // Unsafe implementation
-    }
-}
-
-/// Safe wrapper around dangerous_operation.
-///
-/// # Panics
-/// Panics if buffer is empty.
-pub fn safe_operation(buffer: &mut [u8]) {
-    assert!(!buffer.is_empty());
-    // SAFETY: buffer is non-empty and valid
-    unsafe {
-        raw::dangerous_operation(buffer.as_mut_ptr());
-    }
-}
+[lints]
+workspace = true
 ```
 
-### Dependencies Flow Toward Core
+Workspace dependency declarations do not add a dependency to every member. Likewise, metadata and lints are not inherited automatically. Cargo features are additive, so inspect the resolved feature graph when one member enables more capabilities for a shared dependency. See [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html).
 
-**Domain core has no dependencies on infrastructure.**
+## MSRV and Resolver Behavior
 
-```
-┌─────────────────────────────────────┐
-│              CLI / API              │  ← Entry points
-├─────────────────────────────────────┤
-│            Application              │  ← Orchestration
-├─────────────────────────────────────┤
-│    Storage    │    External APIs    │  ← Infrastructure
-├───────────────┴─────────────────────┤
-│           Domain Core               │  ← Pure types & logic
-└─────────────────────────────────────┘
-     Dependencies flow DOWN only
-```
+`rust-version` declares the compiler version a package supports; it neither selects that compiler nor proves source compatibility. Use a separate toolchain pin for reproducible development and test the MSRV if promising support for it.
 
-```rust
-// domain/mod.rs - no external dependencies
-pub struct Order { /* ... */ }
-pub trait OrderRepository {
-    fn save(&self, order: &Order) -> Result<(), Error>;
-}
+Resolver 3 defaults `resolver.incompatible-rust-versions` to `fallback`, preferring dependency versions with compatible declared requirements where possible. Cargo can still choose an incompatible version when no suitable candidate satisfies resolution, and incomplete dependency metadata or feature-specific requirements can defeat the intended compatibility. A checked-in lockfile also needs validation on the supported compiler. See the [resolver reference](https://doc.rust-lang.org/cargo/reference/resolver.html#rust-version).
 
-// storage/postgres.rs - depends on domain
-use crate::domain::{Order, OrderRepository};
-use sqlx::PgPool;
+For an existing crate, retain its supported minimum until intentionally changing that contract. For new code following this guide, Rust 1.98.1 is the development baseline. Mixed-edition and mixed-MSRV workspaces are possible, but their shared dependency graph needs explicit checks.
 
-pub struct PostgresOrderRepository { pool: PgPool }
-impl OrderRepository for PostgresOrderRepository { /* ... */ }
-```
+## Features and Dependency Boundaries
 
-### Use Cargo Features for Optional Functionality
-
-**Feature-gate optional dependencies and functionality.**
+Use features for optional capabilities and optional dependencies. Prefer additive behavior so dependencies can combine feature sets:
 
 ```toml
 [package]
-name = "mylib"
+name = "optional-data-format"
+version = "0.1.0"
+edition = "2024"
 
 [features]
 default = []
 serde = ["dep:serde"]
-async = ["dep:tokio"]
-full = ["serde", "async"]
 
 [dependencies]
-serde = { version = "1.0", optional = true }
-tokio = { version = "1.0", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
 ```
 
 ```rust
-#[cfg(feature = "serde")]
-use serde::{Serialize, Deserialize};
-
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
     pub name: String,
 }
 ```
 
-Feature naming: use the dependency name directly, not `use-serde` or `with-serde`.
+Check the default build, supported minimal configurations, and relevant combinations. `--all-features` is useful only when that combined configuration is supported. Use `cargo tree -e features` to inspect activation and `cargo tree -i dependency_name` to inspect reverse dependencies.
 
-### Workspace Inheritance (Rust 1.64+)
+Keep core behavior independent of infrastructure when doing so improves testability and reuse. Avoid introducing a trait for every dependency merely to enforce a diagram; model the abstractions the domain actually needs.
 
-**Centralize `version`, `edition`, `license`, `rust-version`, and dependencies at the workspace root** — members inherit with `.workspace = true`.
+## Unsafe Internals
 
-```toml
-# Cargo.toml at workspace root
-[workspace]
-members = ["core", "api", "cli"]
+Keep unsafe machinery behind a small safe interface whose constructors and operations preserve the invariant. Module privacy reduces the code that must maintain that invariant; it is not a substitute for a proof. [redb's source](../../resources/languages/rust/redb/src) separates public typed tables and transactions from storage internals, while guards and lifetimes connect the two. See [unsafe](unsafe.md) for complete boundary examples.
 
-[workspace.package]
-version = "0.3.0"
-edition = "2024"
-license = "MIT"
-rust-version = "1.85"
-authors = ["Your Name"]
+## Validation
 
-[workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-thiserror = "2"
-
-# Member Cargo.toml
-[package]
-name = "core"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-rust-version.workspace = true
-
-[dependencies]
-serde.workspace = true
-thiserror.workspace = true
-```
-
-One place to bump versions. One place to set `edition = "2024"`. No drift.
-
-### Workspace Lints (Rust 1.74+)
-
-**Declare lints once at the workspace root; members opt in with `lints.workspace = true`.**
-
-```toml
-# Cargo.toml at workspace root
-[workspace.lints.clippy]
-pedantic = "warn"
-unwrap_used = "warn"
-expect_used = "warn"
-
-[workspace.lints.rust]
-unsafe_op_in_unsafe_fn = "deny"
-missing_docs = "warn"
-
-# Member Cargo.toml
-[lints]
-workspace = true
-```
-
-Prefer this over per-crate `#![warn(…)]` attributes — it's declarative, enforced by Cargo, and versioned with your repo.
-
-### MSRV Declaration and Resolver (Rust 1.84+)
-
-**Declare `rust-version` to get MSRV-aware dependency resolution.** Cargo 1.84+ prefers dependency versions whose own MSRV is compatible with yours, avoiding surprise breakage from a transitive dep bump.
-
-```toml
-[package]
-rust-version = "1.85"
-```
-
-Pair with `cargo msrv verify` (from the `cargo-msrv` crate) in CI if you want to enforce the declaration against actual source compatibility.
-
-### Edition Field
-
-**Set `edition = "2024"` on every new crate.** For existing crates, run `cargo fix --edition` and flip the field — see [edition.md](edition.md) for the full playbook.
-
-```toml
-[package]
-edition = "2024"
-```
-
-Mixed-edition workspaces are fully supported — migrate crate-by-crate. Declare the new default at the workspace root so new members pick up 2024 automatically.
-
-### Module File Patterns
-
-**Avoid unnecessary nesting. Both `foo.rs` and `foo/mod.rs` are valid.**
-
-```
-# ✓ PREFERRED: Flat files for leaf modules
-src/
-├── lib.rs
-├── auth.rs        # Simple module
-├── storage.rs     # Simple module
-└── api/           # Directory only because it has submodules
-    ├── mod.rs
-    ├── handlers.rs
-    └── middleware.rs
-
-# ✓ ALSO OK: Directory style (team preference)
-src/
-├── lib.rs
-├── auth/
-│   └── mod.rs     # Acceptable if team prefers consistency
-└── api/
-    ├── mod.rs
-    ├── handlers.rs
-    └── middleware.rs
-```
-
-The goal is avoiding unnecessary depth, not enforcing a specific style. Pick one approach per project and stay consistent. Don't bikeshed layout—focus on logical organization.
-
-## Summary
-
-- **NEVER** organize by technical layer (models/, services/, handlers/)
-- **NEVER** expose internal implementation details as public API
-- **DO** organize by feature/domain
-- **DO** use `pub(crate)` for internal APIs
-- **DO** reexport public API from crate root
-- **DO** use `#[non_exhaustive]` for public enums/structs that may grow
-- **DO** use sealed traits when you must control implementations
-- **DO** prefer small, focused crates in workspaces
-- **DO** use `[workspace.package]` + `.workspace = true` to centralize version/edition/license/MSRV
-- **DO** use `[workspace.lints]` + `lints.workspace = true` to centralize lint policy
-- **DO** declare `rust-version` — the MSRV-aware resolver (1.84+) prevents transitive breakage
-- **DO** set `edition = "2024"` on all new crates
-- **DO** contain unsafe in minimal modules with safe wrappers
-- **DO** use Cargo features for optional functionality
-- **DON'T** create deeply nested module hierarchies
-- **DON'T** duplicate lint configuration across workspace members
-
----
+Inspect the workspace with `cargo metadata --no-deps --format-version 1`, then run the [routine validation commands](test.md#routine-validation) for its supported feature, platform, and compiler matrix.
 
 ## Related
 
-- [traits.md](traits.md) - Trait visibility and extension patterns
-- [unsafe.md](unsafe.md) - Containing unsafe code
-- [quality.md](quality.md) - Documentation for modules
-
-## References
-
-- [Rust API Guidelines: Documentation](https://rust-lang.github.io/api-guidelines/documentation.html)
-- [Rust Design Patterns: Small Crates](https://rust-unofficial.github.io/patterns/patterns/structural/small-crates.html)
-- [Cargo Book: Features](https://doc.rust-lang.org/cargo/reference/features.html)
-- [Cargo Book: Workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html) - Inheritance syntax
-- [Cargo Book: Lints configuration](https://doc.rust-lang.org/cargo/reference/manifest.html#the-lints-section) - `[lints]` and `[workspace.lints]`
-- [MSRV-aware resolver RFC](https://rust-lang.github.io/rfcs/3537-msrv-resolver.html)
+- [Edition 2024](edition.md): migration order and workspace settings
+- [Quality](quality.md): lint policy and documentation
+- [Macros](macros.md): exported helpers and hygiene
+- [Source catalog](resources.md): examples and provenance

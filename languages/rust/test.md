@@ -4,423 +4,138 @@ paths: "**/*.rs, **/Cargo.toml"
 
 # Rust Testing
 
-Testing patterns, organization, and best practices.
+Test observable contracts and meaningful failure modes. Use native Rust and Cargo facilities before adding helpers, and choose focused tests that can detect a realistic regression.
 
-## Test Organization
+## Unit, Integration, and Documentation Tests
 
-### Unit Tests in Same File
+Keep unit tests near the implementation when private details or small algorithms need coverage:
 
 ```rust
-// src/parser.rs
-
-pub fn parse(input: &str) -> Result<Ast, ParseError> {
-    // implementation
+fn doubled(value: u32) -> Option<u32> {
+    value.checked_mul(2)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::doubled;
 
     #[test]
-    fn parses_empty_input() {
-        let result = parse("");
-        assert!(result.is_ok());
+    fn reports_overflow() {
+        assert_eq!(doubled(u32::MAX), None);
+        assert_eq!(doubled(3), Some(6));
     }
+}
 
-    #[test]
-    fn rejects_invalid_syntax() {
-        let result = parse("{{invalid");
-        assert!(matches!(result, Err(ParseError::Syntax(_))));
-    }
+assert_eq!(doubled(u32::MAX), None);
+```
+
+Put public API integration tests in `tests/`. Each integration-test target is a separate crate, so it exercises downstream visibility. Share helpers through `tests/common/mod.rs` when useful, and avoid many tiny targets that needlessly increase linking time.
+
+Use rustdoc examples to verify normal usage and important type constraints. Include imports and complete setup; keep intentional failures distinct from runnable examples:
+
+```rust,compile_fail
+fn move_then_read() {
+    let text = String::from("hello");
+    drop(text);
+    println!("{text}");
 }
 ```
 
-### Integration Tests in `tests/` Directory
+A `compile_fail` test succeeds for any compiler error; inspect the diagnostic to ensure it fails for the intended reason. Use a UI-test tool such as `trybuild` when stable diagnostic snapshots or a larger set of compile-pass/fail cases are part of the API contract.
 
-```
-mylib/
-├── src/
-│   └── lib.rs
-└── tests/
-    ├── integration.rs      # Single integration test
-    └── api/                # Test module with helpers
-        ├── mod.rs
-        └── helpers.rs
-```
-
-```rust
-// tests/integration.rs
-use mylib::Client;
-
-#[test]
-fn full_workflow() {
-    let client = Client::new();
-    // Test the public API as an external user would
-}
-```
-
-### Doc Tests for Examples
-
-```rust
-/// Adds two numbers together.
-///
-/// # Examples
-///
-/// ```
-/// use mylib::add;
-/// assert_eq!(add(2, 3), 5);
-/// ```
-///
-/// Negative numbers work too:
-///
-/// ```
-/// use mylib::add;
-/// assert_eq!(add(-1, 1), 0);
-/// ```
-pub fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-```
-
-Doc tests are compiled and run with `cargo test`. They verify examples stay correct.
-
-## Test Patterns
-
-### Type-Safe Test Fixtures
-
-**Use builders for test data, not random values.**
-
-```rust
-#[cfg(test)]
-mod tests {
-    struct TestUser {
-        id: UserId,
-        name: String,
-        email: Email,
-    }
-
-    impl TestUser {
-        fn builder() -> TestUserBuilder {
-            TestUserBuilder::default()
-        }
-    }
-
-    #[derive(Default)]
-    struct TestUserBuilder {
-        id: Option<UserId>,
-        name: Option<String>,
-        email: Option<Email>,
-    }
-
-    impl TestUserBuilder {
-        fn id(mut self, id: u64) -> Self {
-            self.id = Some(UserId(id));
-            self
-        }
-
-        fn name(mut self, name: impl Into<String>) -> Self {
-            self.name = Some(name.into());
-            self
-        }
-
-        fn build(self) -> TestUser {
-            TestUser {
-                id: self.id.unwrap_or(UserId(1)),
-                name: self.name.unwrap_or_else(|| "Test User".into()),
-                email: self.email.unwrap_or_else(|| Email::parse("test@example.com").unwrap()),
-            }
-        }
-    }
-
-    #[test]
-    fn test_with_custom_name() {
-        let user = TestUser::builder()
-            .name("Alice")
-            .build();
-        assert_eq!(user.name, "Alice");
-    }
-}
-```
-
-### Test `Send + Sync` Bounds
-
-**Verify thread safety at compile time.**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_send<T: Send>() {}
-    fn assert_sync<T: Sync>() {}
-
-    #[test]
-    fn client_is_send_sync() {
-        assert_send::<Client>();
-        assert_sync::<Client>();
-    }
-
-    #[test]
-    fn error_is_send_sync() {
-        assert_send::<MyError>();
-        assert_sync::<MyError>();
-    }
-}
-```
-
-These tests fail at compile time if bounds aren't satisfied.
-
-### Property-Based Testing
-
-**Use `proptest` for generative testing.**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    proptest! {
-        #[test]
-        fn parse_roundtrip(s in "[a-z]+") {
-            let parsed = parse(&s).unwrap();
-            let rendered = render(&parsed);
-            assert_eq!(s, rendered);
-        }
-
-        #[test]
-        fn addition_is_commutative(a in 0i32..1000, b in 0i32..1000) {
-            assert_eq!(add(a, b), add(b, a));
-        }
-    }
-}
-```
-
-### Async Tests
-
-**Use `#[tokio::test]` for async tests.**
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn fetches_data() {
-        let client = Client::new();
-        let result = client.fetch("https://example.com").await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn handles_timeout() {
-        let client = Client::builder()
-            .timeout(Duration::from_millis(1))
-            .build();
-        let result = client.fetch("https://slow.example.com").await;
-        assert!(matches!(result, Err(Error::Timeout)));
-    }
-}
-```
-
-### Test Helpers with `rstest`
-
-**Use `rstest` for parameterized tests and fixtures.**
-
-```rust
-use rstest::{rstest, fixture};
-
-#[fixture]
-fn client() -> Client {
-    Client::builder()
-        .base_url("https://test.example.com")
-        .build()
-}
-
-#[rstest]
-#[case("hello", 5)]
-#[case("", 0)]
-#[case("rust", 4)]
-fn test_length(#[case] input: &str, #[case] expected: usize) {
-    assert_eq!(input.len(), expected);
-}
-
-#[rstest]
-fn test_with_fixture(client: Client) {
-    // client fixture is automatically injected
-    assert!(client.is_connected());
-}
-```
-
-### Shared Fixtures with `LazyLock`
-
-**For expensive setup shared across tests**, use `LazyLock` (1.80+) — no more `lazy_static!` in test modules.
-
-```rust
-use std::sync::LazyLock;
-
-static TEST_DB: LazyLock<TestDb> = LazyLock::new(|| {
-    TestDb::spawn().expect("test db to start")
-});
-
-#[test]
-fn fetches_user() {
-    let conn = TEST_DB.connection();
-    // ...
-}
-```
-
-Note: tests run in parallel by default. A `LazyLock<TestDb>` shared across tests must support concurrent access or you'll need per-test isolation (transactions, unique schemas).
-
-### `#[expect(lint)]` in Tests
-
-Inside `#[cfg(test)]` modules, use `#[expect(lint, reason = "…")]` to suppress warnings — and get a warning if the suppression becomes stale.
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[expect(clippy::unwrap_used, reason = "tests fail loudly on unexpected None")]
-    fn parses_known_good() {
-        let v = parse("valid").unwrap();
-        assert_eq!(v, 42);
-    }
-}
-```
-
-### Cross-Compiled Doctests (Rust 1.89+)
-
-`cargo test --target <triple>` now runs doctests under the specified target. If your doctests exercise platform-specific code (e.g. `#[cfg(target_os = "…")]`), they're now covered by cross-target CI.
-
-## Test Tooling
-
-### `cargo nextest` — The Modern Default
-
-**`cargo nextest run`** is a drop-in replacement for `cargo test` with materially better UX: parallel test processes (not just threads), per-test timeouts, retries for flaky tests, JUnit XML output, and a cleaner reporting format.
+## Routine Validation
 
 ```bash
-cargo install cargo-nextest
-cargo nextest run
-cargo nextest run --retries 3 --test-threads 16
-cargo nextest run --profile ci --junit-path target/nextest-results.xml
+cargo fmt --all -- --check
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+cargo test --workspace --doc
 ```
 
-`cargo nextest` does **not** run doctests — run those separately with `cargo test --doc`.
+These commands do not rewrite source files. Cargo still writes build artifacts and may resolve dependencies; add `--locked` when a job must reject lockfile changes. Run the supported feature combinations and platforms for the project rather than blindly enabling incompatible features.
 
-### Snapshot Testing with `insta`
+`--all-targets` selects unit, integration, example, benchmark, and binary targets as applicable; it excludes doctests. A normal `cargo test` includes doctests for eligible library targets, but the explicit pair above avoids ambiguity when target flags are added.
 
-**For output assertions longer than a few lines**, snapshot testing is cleaner than hand-written `assert_eq!`.
-
-```rust
-use insta::assert_yaml_snapshot;
-
-#[test]
-fn renders_report() {
-    let report = Report::new().with_item("alpha").with_item("beta");
-    assert_yaml_snapshot!(report);
-}
-```
-
-Workflow:
+Nextest can improve scheduling, isolation, and reporting for larger suites. It does not run doctests as part of a normal run:
 
 ```bash
-cargo install cargo-insta
-cargo test                  # snapshots that don't match write a .new file
-cargo insta review          # interactive: accept or reject each
+cargo nextest run --workspace
+cargo test --workspace --doc
 ```
 
-Commit `.snap` files to git. Reject any snapshot diff you don't understand — that's what makes the tool useful.
+Use Cargo's built-in runner when it meets the project's needs. Cross-compiled doctests are supported on current Rust, but executing them still requires a runnable target or a configured runner. See [`cargo test`](https://doc.rust-lang.org/cargo/commands/cargo-test.html) and [nextest's doctest guidance](https://nexte.st/docs/running/#doctests).
 
-## Test Best Practices
+## Fixtures and Repeatability
 
-### Test Public API, Not Internals
+Use small deterministic fixtures for specific scenarios. Builders help when tests repeatedly construct a large object, but should not hide the field that makes the case significant. Give tests independent temporary directories, ports, and database state where needed.
+
+Property-based tests are useful for invariants such as round trips, ordering, or equivalence between implementations. Use a framework that records failing inputs and supports shrinking; preserve regression cases. Reproducibility requires more than an arbitrary seed when the generator algorithm or dependency version can change.
+
+Snapshot tests can make large structured outputs reviewable. Remove irrelevant timestamps, paths, and ordering noise, and inspect proposed changes with tools such as `cargo insta review`. Do not accept a snapshot update solely because the implementation changed.
+
+`rstest` can reduce repetitive parameter and fixture code; ordinary helper functions and table-driven loops are often sufficient. Prefer explicit data over a complex fixture lifecycle when the tests are small.
+
+## Assert the Contract
+
+Use `assert_eq!` for values with useful debug output and `assert_matches!` for variants and guards. The latter is stable since 1.96 and needs an explicit import:
 
 ```rust
-// ✓ CORRECT: Test observable behavior
-#[test]
-fn user_can_be_created_and_retrieved() {
-    let store = UserStore::new();
-    let user = User::new("alice@example.com");
+use core::assert_matches;
 
-    store.save(&user).unwrap();
-    let retrieved = store.find_by_email("alice@example.com").unwrap();
-
-    assert_eq!(retrieved.email, user.email);
-}
-
-// ✘ WRONG: Testing internal implementation details
-#[test]
-fn internal_cache_is_populated() {
-    let store = UserStore::new();
-    store.save(&user).unwrap();
-    assert!(store.cache.contains_key(&user.id));  // Tests internals
-}
+let parsed = "42".parse::<u32>();
+assert_matches!(parsed, Ok(value) if value > 0);
+assert_eq!(parsed.unwrap(), 42);
 ```
 
-### No Random Without Seeds
+Avoid depending on unordered map iteration. Sort results when order is irrelevant, or compare through the collection's semantic equality. Test both success and meaningful boundary cases instead of merely calling every helper.
 
-**Tests must be reproducible.**
+If thread-safety is a public contract, assert it at compile time:
 
 ```rust
-// ✘ WRONG: Non-deterministic test
-#[test]
-fn random_test() {
-    let value = rand::random::<u32>();
-    assert!(process(value).is_ok());  // May fail randomly
-}
+use std::sync::Arc;
 
-// ✓ CORRECT: Seeded RNG for reproducibility
-#[test]
-fn seeded_random_test() {
-    use rand::SeedableRng;
-    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-    let value = rng.gen::<u32>();
-    assert!(process(value).is_ok());
-}
+fn require_send_sync<T: Send + Sync>() {}
+require_send_sync::<Arc<String>>();
 ```
 
-### Use `assert!` Macros Appropriately
+Check async future bounds separately from receiver bounds. A `Send + Sync` service can still return a non-`Send` future; [traits](traits.md#async-methods-decide-the-future-contract) includes both positive and negative examples.
+
+## Async Tests
+
+Use the runtime's test support and keep spawned tasks accounted for. Tokio's paused clock is useful for deterministic timer tests; it requires `test-util` and a current-thread runtime:
 
 ```rust
-// Prefer specific assertions for better error messages
-assert_eq!(actual, expected);           // Equality
-assert_ne!(actual, unexpected);         // Inequality
-assert!(condition);                     // Boolean
-assert!(matches!(value, Pattern));      // Pattern matching
+use tokio::time::{sleep, Duration, Instant};
 
-// With custom messages
-assert_eq!(result.len(), 3, "expected 3 items, got {}", result.len());
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    tokio::time::pause();
+    let start = Instant::now();
+    sleep(Duration::from_secs(30)).await;
+    assert!(Instant::now() - start >= Duration::from_secs(30));
+}
 ```
 
-## Summary
+In a test target, use `#[tokio::test(start_paused = true)]` for this setup. Timer granularity can make a sleep complete slightly after its requested duration, so avoid exact elapsed-time equality. Paused time does not virtualize external I/O. Prefer explicit synchronization to real sleeps for task ordering, and reserve real deadlines for detecting hangs.
 
-- **DO** put unit tests in `#[cfg(test)] mod tests` in same file
-- **DO** put integration tests in `tests/` directory
-- **DO** write doc tests for all public API examples
-- **DO** use builders for test fixtures
-- **DO** use `LazyLock` for shared expensive fixtures — never `lazy_static!`
-- **DO** test `Send + Sync` bounds at compile time
-- **DO** use `proptest` for property-based testing
-- **DO** use seeded RNG for reproducible tests
-- **DO** run tests with `cargo nextest` for better parallelism and reporting
-- **DO** use `insta` for snapshot tests of large expected outputs
-- **DO** use `#[expect(lint, reason = "…")]` instead of `#[allow(lint)]` in test code
-- **DON'T** test internal implementation details
-- **DON'T** use non-deterministic values without seeds
+Test cancellation and recovery where they are part of the contract: closed channels, a dropped response receiver, partial I/O, and shutdown with active tasks. Do not assume a timeout undoes completed effects. [Tokio's channel error tests and types](../../resources/languages/rust/tokio/tokio/src/sync/mpsc/error.rs) and [select contract](../../resources/languages/rust/tokio/tokio/src/macros/select.rs) provide useful reading paths.
 
----
+## Unsafe and Macro Tests
+
+Exercise safe interfaces to unsafe code with valid boundary cases. Miri can detect many undefined behaviors on exercised executions; it cannot prove a whole abstraction sound, and not all platform or FFI code is supported. Never run deliberately invalid raw-pointer examples as ordinary tests. See [unsafe](unsafe.md).
+
+For macros, test downstream use, renamed dependencies, helper visibility, input syntax, and generated trait bounds. Expansion output is a diagnostic aid; compiling and running the result provides stronger evidence than inspecting expansion text alone. See [macros](macros.md).
+
+## Validation Scope
+
+Run relevant tests for the change, then required project checks. Use supported feature and platform combinations, and test the MSRV when it is promised. Apply source fixes deliberately and review them before verification; `cargo fix` is not a test command.
+
+Keep lint exceptions local. `unwrap` is often appropriate in tests because unexpected errors should fail the case. If a lint policy objects, choose a narrow, explained exception rather than turning every assertion into error plumbing.
 
 ## Related
 
-- [quality.md](quality.md) - Documentation and examples
-- [errors.md](errors.md) - Testing error conditions
-
-## References
-
-- [Rust Book: Testing](https://doc.rust-lang.org/book/ch11-00-testing.html)
-- [cargo-nextest](https://nexte.st/) - Modern test runner
-- [insta crate](https://insta.rs/) - Snapshot testing
-- [proptest crate](https://docs.rs/proptest/)
-- [rstest crate](https://docs.rs/rstest/)
-- [`#[expect(lint)]` — Rust 1.81 notes](https://blog.rust-lang.org/2024/09/05/Rust-1.81.0.html)
+- [Quality](quality.md): examples and lint policy
+- [Modules](modules.md): workspace validation
+- [Async I/O](async-io.md): task and cancellation contracts
+- [Source catalog](resources.md): pinned real-world implementations
