@@ -17,7 +17,7 @@ Modern language guidelines for the age of AI. Opinionated style guides that help
 
 ## Resources
 
-[Phora](https://github.com/srnnkls/phora) manages reference snapshots under `resources/`, declared in `phora.toml` and pinned in `phora.lock`. The configuration requires Phora 0.3.1, pinned in [mise.toml](mise.toml). Git mirrors live in Phora's cache; URL sources are integrity-pinned by digest. Git bindings disable template rendering and use per-file snapshots to preserve source files and names:
+[Phora](https://github.com/srnnkls/phora) manages reference snapshots under `resources/`, declared in `phora.toml` and pinned in `phora.lock`. The configuration requires Phora 0.3.2, pinned in [mise.toml](mise.toml). Git mirrors live in Phora's cache; URL sources are integrity-pinned by digest. Git bindings disable template rendering and use per-file snapshots to preserve source files and names:
 
 ```sh
 mise install github:srnnkls/phora
