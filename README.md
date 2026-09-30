@@ -17,13 +17,28 @@ Modern language guidelines for the age of AI. Opinionated style guides that help
 
 ## Resources
 
-[Phora](https://github.com/srnnkls/phora) manages reference sources under `resources/`, declared in `phora.toml` and resolved by `phora.lock`. Git sources can retain history; URL sources are integrity-pinned by digest:
+[Phora](https://github.com/srnnkls/phora) manages reference snapshots under `resources/`, declared in `phora.toml` and pinned in `phora.lock`. The configuration requires Phora 0.2.0, pinned in [mise.toml](mise.toml). Git mirrors live in Phora's cache; URL sources are integrity-pinned by digest. Git bindings disable template rendering and use per-file snapshots to preserve source files and names:
 
 ```sh
-phora sync
+mise install github:srnnkls/phora
+mise exec -- phora sync --frozen
 ```
 
-Advance every source with `phora update`, or one source with `phora update <source>`.
+Advance every source with `mise exec -- phora update`, or one source with `mise exec -- phora update <source>`.
+
+The Rust collection in `resources/languages/rust/` includes API Guidelines, Rust Design Patterns, Idiomatic Rust, and these language and implementation references:
+
+| Source | Local directory | Useful for studying |
+| --- | --- | --- |
+| [The Rust Book](https://github.com/rust-lang/book) | `rust-book/` | Ownership, lifetimes, traits, and language fundamentals |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | `ripgrep/` | CLI and library boundaries, ownership, builders, and streaming I/O |
+| [redb](https://github.com/cberner/redb) | `redb/` | Transaction APIs, typed tables, storage, and durability |
+| [Tokio](https://github.com/tokio-rs/tokio) | `tokio/` | Async tasks, synchronization, cancellation, and runtime design |
+| [Serde](https://github.com/serde-rs/serde) | `serde/` | Trait contracts, borrowed deserialization, visitors, and derive macros |
+
+Use these implementations as contextual examples when assessing the guides; their choices reflect different API and performance requirements. The manifest excludes upstream symlink aliases in Patterns, ripgrep, and Serde while retaining their target files. These snapshots are intended for source review; building upstream packages may require restoring those aliases.
+
+`mise exec -- phora verify` checks deployed contents against the recorded digests. The `resources/` tree is Git-ignored; commit manifest and lock changes to make additions reproducible.
 
 ## Languages
 
