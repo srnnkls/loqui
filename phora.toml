@@ -9,7 +9,7 @@ branch = "master"
 [sources.patterns]
 repo = "rust-unofficial/patterns"
 branch = "main"
-exclude = ["theme/book.js"] # Symlink alias; third_party/mdbook/book.js is included.
+exclude = ["theme/book.js"]  # Symlink alias; third_party/mdbook/book.js is included.
 
 [sources.idiomatic-rust]
 repo = "mre/idiomatic-rust"
@@ -38,7 +38,7 @@ digest = "sha256:9cd1fc1181beed81d24cba4f4fbd6b27e9c05f21dcf8702d79b28ebb58ea0df
 [sources.ripgrep]
 git = "https://github.com/BurntSushi/ripgrep.git"
 branch = "master"
-exclude = ["HomebrewFormula"] # Symlink alias; pkg/brew is included.
+exclude = ["HomebrewFormula"]  # Symlink alias; pkg/brew is included.
 
 [sources.redb]
 git = "https://github.com/cberner/redb.git"
@@ -53,20 +53,20 @@ git = "https://github.com/serde-rs/serde.git"
 branch = "master"
 # Package aliases point to files and directories already included in this snapshot.
 exclude = [
-    "serde/LICENSE-APACHE",
-    "serde/LICENSE-MIT",
-    "serde/README.md",
-    "serde/crates-io.md",
-    "serde/src/core",
-    "serde_core/LICENSE-APACHE",
-    "serde_core/LICENSE-MIT",
-    "serde_derive/LICENSE-APACHE",
-    "serde_derive/LICENSE-MIT",
-    "serde_derive/README.md",
-    "serde_derive/crates-io.md",
-    "serde_derive_internals/LICENSE-APACHE",
-    "serde_derive_internals/LICENSE-MIT",
-    "serde_derive_internals/src",
+  "serde/LICENSE-APACHE",
+  "serde/LICENSE-MIT",
+  "serde/README.md",
+  "serde/crates-io.md",
+  "serde/src/core",
+  "serde_core/LICENSE-APACHE",
+  "serde_core/LICENSE-MIT",
+  "serde_derive/LICENSE-APACHE",
+  "serde_derive/LICENSE-MIT",
+  "serde_derive/README.md",
+  "serde_derive/crates-io.md",
+  "serde_derive_internals/LICENSE-APACHE",
+  "serde_derive_internals/LICENSE-MIT",
+  "serde_derive_internals/src",
 ]
 
 [sources.rust-book]
