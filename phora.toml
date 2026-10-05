@@ -74,14 +74,14 @@ git = "https://github.com/rust-lang/book.git"
 branch = "main"
 
 [targets.python-resources]
-path = "resources/languages/python"
+path = "skills/loqui/resources/languages/python"
 layout = "by-source"
 
 [targets.python-resources.sources]
 python-testing-with-pytest = { template = false, collapse = false }
 
 [targets.rust-resources]
-path = "resources/languages/rust"
+path = "skills/loqui/resources/languages/rust"
 layout = "by-source"
 
 [targets.rust-resources.sources]
@@ -95,7 +95,7 @@ serde = { template = false, collapse = false }
 rust-book = { template = false, collapse = false }
 
 [targets.elisp-resources]
-path = "resources/languages/elisp"
+path = "skills/loqui/resources/languages/elisp"
 layout = "by-source"
 
 [targets.elisp-resources.sources]
