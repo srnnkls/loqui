@@ -26,7 +26,7 @@ mise exec -- phora sync --frozen
 
 Advance every source with `mise exec -- phora update`, or one source with `mise exec -- phora update <source>`.
 
-The Rust collection in `resources/languages/rust/` includes API Guidelines, Rust Design Patterns, Idiomatic Rust, and these language and implementation references:
+The Rust collection in `skills/loqui/resources/languages/rust/` includes API Guidelines, Rust Design Patterns, Idiomatic Rust, and these language and implementation references:
 
 | Source | Local directory | Useful for studying |
 | --- | --- | --- |
@@ -42,12 +42,12 @@ Use these implementations as contextual examples when assessing the guides; thei
 
 ## Languages
 
-- *[Python](languages/python/)* — Types first, composition over inheritance, feature-based organization
-- *[Go](languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
-- *[Rust](languages/rust/)* — Ownership, domain types, explicit errors, trait-based composition
-- *[Zig](languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
-- *[Bash](languages/bash/)* — Command patterns, shell scripting, explicit error handling
-- *[Emacs Lisp](languages/elisp/)* — Functional core, explicit editor effects, lexical binding
+- *[Python](skills/loqui/languages/python/)* — Types first, composition over inheritance, feature-based organization
+- *[Go](skills/loqui/languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
+- *[Rust](skills/loqui/languages/rust/)* — Ownership, domain types, explicit errors, trait-based composition
+- *[Zig](skills/loqui/languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
+- *[Bash](skills/loqui/languages/bash/)* — Command patterns, shell scripting, explicit error handling
+- *[Emacs Lisp](skills/loqui/languages/elisp/)* — Functional core, explicit editor effects, lexical binding
 
 ## Principles
 

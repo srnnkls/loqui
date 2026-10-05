@@ -6,7 +6,7 @@ paths: "**/*.rs, **/Cargo.toml"
 
 Use language and library specifications for contracts, teaching material for explanations, and mature implementations for concrete design tradeoffs. A project's working code is evidence that a design can be useful; it does not establish a universal performance or style rule.
 
-The local resources live under `resources/languages/rust/` at the repository root and are populated through Phora. See [resource setup](../../README.md#resources), [source configuration](../../phora.toml), and the exact revisions in [phora.lock](../../phora.lock). These are reading snapshots rather than runtime dependencies. Filtered symlink aliases mean a snapshot is not necessarily a standalone buildable checkout.
+The local resources live under the skill's `resources/languages/rust/` and are populated through Phora; the loqui repository's README, `phora.toml` and `phora.lock` record the setup and exact revisions. These are reading snapshots rather than runtime dependencies. Filtered symlink aliases mean a snapshot is not necessarily a standalone buildable checkout.
 
 ## Source Roles and Provenance
 
