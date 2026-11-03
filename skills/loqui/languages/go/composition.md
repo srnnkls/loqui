@@ -16,6 +16,24 @@ Returning a concrete type is a useful default for constructors because callers r
 
 Embedding promotes fields and methods; it does not provide virtual dispatch or behavioral inheritance. Prefer a named field when the embedded type's methods should not become part of the public API. In particular, keep implementation mutexes private.
 
+## Domain types and boundaries
+
+Give domain concepts their own named types, such as `type OrderID string` or `type Cents int64`, so values with different meanings do not mix silently. Represent a closed set of alternatives with a named type and constants, or with an interface whose unexported method only the variant types implement. A `switch` over such a type handles every case it can receive.
+
+Parse external input once, at the boundary. Decode JSON, flags, or environment into a wire struct, then convert it with a constructor that returns `(T, error)`. With unexported fields, a non-zero `T` can only come from that constructor, so code past the boundary accepts `T` and does not check it again. Avoid passing `map[string]any` or raw strings into domain code.
+
+```go
+type Email struct{ addr string }
+
+func ParseEmail(s string) (Email, error) {
+	parsed, err := mail.ParseAddress(s)
+	if err != nil {
+		return Email{}, fmt.Errorf("parse email %q: %w", s, err)
+	}
+	return Email{addr: parsed.Address}, nil
+}
+```
+
 ## Ownership of mutable data
 
 Go passes arguments by value. A slice value contains a reference to backing storage; copying a map, pointer, or interface can also preserve access to shared data. A channel send does not automatically make the receiver the only owner.
@@ -103,5 +121,11 @@ Use `(T, bool)` when a lookup can miss without failing. Use `(T, error)` for an 
 Go 1.26's `new(expr)` creates a pointer to an initialized value. It is useful when that representation fits the API; it is not a reason to turn ordinary value fields into pointers. See [modernization.md](modernization.md).
 
 Keep side-effectful initialization explicit where callers need to choose configuration, handle errors, or control lifetime. Avoid introducing `init`-time I/O merely to shorten construction.
+
+## Package state and effects
+
+Avoid package-level mutable variables. Hold state in a value the caller constructs and passes to the code that uses it. Package-level declarations suit constants, sentinel errors, and tables that are never modified after initialization.
+
+Keep effects at the edges. Code that decides should receive the current time, random values, environment settings, and I/O handles as inputs, such as a `time.Time`, a `func() time.Time`, or an `io.Reader`, instead of calling `time.Now`, `os.Getenv`, or `math/rand/v2` itself. The edge that owns the process supplies the real values; tests supply fixed ones.
 
 Related guidance: [errors](errors.md), [concurrency](concurrency.md), [modules](modules.md), and [reference contracts](resources.md). The [`io`](https://pkg.go.dev/io@go1.27.1), [`iter`](https://pkg.go.dev/iter@go1.27.1), and [`bufio.Scanner`](https://pkg.go.dev/bufio@go1.27.1#Scanner) documentation defines the relevant standard-library contracts.

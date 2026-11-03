@@ -46,6 +46,14 @@ Use `Result` for expected failures. An invariant-backed `expect` can be appropri
 
 Choose task ownership, cancellation, deadlines, and shutdown behavior together. Native async trait methods do not automatically promise a `Send` future. A trait's `Send` bound and dynamic-dispatch support are separate decisions.
 
+### Keep Effects at the Edges
+
+Compute decisions in functions over owned or borrowed values. Read clocks (`Instant::now`, `SystemTime::now`), randomness, environment variables (`std::env::var`), and files in a thin layer that passes the results in. Where the core needs an effect, accept `impl Read`, `impl Write`, or a small trait, so tests supply values instead of replacing globals. Keep hidden I/O out of `Default`, `Deref`, and conversion traits, whose callers do not expect it.
+
+### Keep Mutable State Owned
+
+Hold application state in an owner value and pass references to the code that uses it. Avoid `static mut` and process-wide mutable statics, such as a `static` holding a `Mutex` for application data. `LazyLock` and `OnceLock` suit process-wide data that is immutable after initialization; see [static initialization](types.md#static-and-local-initialization).
+
 ### Choose Abstractions for the Use Case
 
 Generics support specialization and inlining; dynamic dispatch can simplify interfaces, support runtime choice, and reduce monomorphization. `&dyn Trait` does not require heap allocation. Measure performance claims instead of treating either approach as universally faster.
