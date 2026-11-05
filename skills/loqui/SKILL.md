@@ -6,13 +6,14 @@ metadata:
   type: generic
 henia:
   provides:
-    code.style.bash:
-    code.style.elisp:
-    code.style.go:
-    code.style.python:
-    code.style.rust:
-    code.style.zig:
+    code.style.bash: {path: languages/bash/README.md}
+    code.style.elisp: {path: languages/elisp/README.md}
+    code.style.go: {path: languages/go/README.md}
+    code.style.python: {path: languages/python/README.md}
+    code.style.rust: {path: languages/rust/README.md}
+    code.style.zig: {path: languages/zig/README.md}
     code.validation.go: {command: go vet ./... && go build ./...}
+    code.validation.rust: {command: cargo clippy --all-targets -- -D warnings && cargo build}
   targets:
     codex:
       openai:
