@@ -17,7 +17,7 @@ Modern language guidelines for the age of AI. Opinionated style guides that help
 
 ## Resources
 
-[Phora](https://github.com/srnnkls/phora) manages reference snapshots under `resources/`, declared in `phora.toml` and pinned in `phora.lock`. The configuration requires Phora 0.3.3, pinned in [mise.toml](mise.toml). Git mirrors live in Phora's cache; URL sources are integrity-pinned by digest. Git bindings disable template rendering and use per-file snapshots to preserve source files and names:
+[Phora](https://github.com/srnnkls/phora) manages reference snapshots under `resources/`, declared in `phora.toml` and pinned in `phora.lock`. [mise.toml](mise.toml) pins the Phora version. Git mirrors live in Phora's cache; URL sources are integrity-pinned by digest. Git bindings disable template rendering and use per-file snapshots to preserve source files and names:
 
 ```sh
 mise install github:srnnkls/phora
@@ -42,12 +42,12 @@ Use these implementations as contextual examples when assessing the guides; thei
 
 ## Languages
 
-- *[Python](skills/loqui/languages/python/)* — Types first, composition over inheritance, feature-based organization
-- *[Go](skills/loqui/languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
-- *[Rust](skills/loqui/languages/rust/)* — Ownership, domain types, explicit errors, trait-based composition
-- *[Zig](skills/loqui/languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
-- *[Bash](skills/loqui/languages/bash/)* — Command patterns, shell scripting, explicit error handling
-- *[Emacs Lisp](skills/loqui/languages/elisp/)* — Functional core, explicit editor effects, lexical binding
+- *[Python](languages/python/)* — Types first, composition over inheritance, feature-based organization
+- *[Go](languages/go/)* — Interfaces for abstraction, packages for namespacing, errors as values
+- *[Rust](languages/rust/)* — Ownership, domain types, explicit errors, trait-based composition
+- *[Zig](languages/zig/)* — Bounded state transitions, explicit ownership, executable invariants
+- *[Bash](languages/bash/)* — Command patterns, shell scripting, explicit error handling
+- *[Emacs Lisp](languages/elisp/)* — Functional core, explicit editor effects, lexical binding
 
 ## Principles
 
