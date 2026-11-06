@@ -5,6 +5,9 @@ description: |
 metadata:
   type: generic
 henia:
+  resources:
+    package:
+      languages/: languages/
   provides:
     code.style.bash: {path: languages/bash/README.md}
     code.style.elisp: {path: languages/elisp/README.md}
