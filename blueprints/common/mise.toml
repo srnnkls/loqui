@@ -1,0 +1,20 @@
+[tools]
+hk = { version = "2.13.0", postinstall = "hk install --mise", depends = ["pkl"] }
+pkl = "0.33.1"
+"github:srnnkls/phora" = "0.5.0"
+
+[tasks."loqui:check"]
+description = "Run every loqui gate: format, lint, type check, tests"
+run = "hk check --all"
+
+[tasks."loqui:fix"]
+description = "Apply loqui formatters and fixers"
+run = "hk fix --all"
+
+[tasks."loqui:verify"]
+description = "Fail when managed loqui files drifted from the pinned blueprints"
+run = ["phora sync --frozen --force", "git diff --exit-code"]
+
+[tasks."loqui:update"]
+description = "Move the blueprints to their latest commit, then gate"
+run = ["phora update --prune", "hk check --all"]

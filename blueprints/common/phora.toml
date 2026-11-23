@@ -1,0 +1,14 @@
+[sources.loqui-common]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/common"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-common]
+collapse = false
+take = [
+  { "gate.pkl" = ".loqui/hk/gate.pkl" },
+  { "mise.toml" = ".config/mise/conf.d/loqui.toml" },
+]

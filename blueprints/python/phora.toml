@@ -1,0 +1,16 @@
+[sources.loqui-python]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/python"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-python]
+collapse = false
+take = [
+  { "hk.pkl" = ".loqui/hk/python.pkl" },
+  { "ruff.toml" = ".loqui/python/ruff.toml" },
+  { "ty.toml" = "ty.toml" },
+  { "mise.toml" = ".config/mise/conf.d/loqui-python.toml" },
+]

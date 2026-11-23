@@ -1,0 +1,14 @@
+[sources.loqui-elisp]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/elisp"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-elisp]
+collapse = false
+take = [
+  { "hk.pkl" = ".loqui/hk/elisp.pkl" },
+  { "strict.el" = ".loqui/elisp/strict.el" },
+]

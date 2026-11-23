@@ -1,0 +1,77 @@
+version: "2"
+
+run:
+  tests: true
+  relative-path-mode: gomod
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      extra:
+        group-params: true
+        clothe-returns: true
+    goimports:
+      local-prefixes:
+        - {{ go_module }}
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - exhaustive
+    - forcetypeassert
+    - gochecksumtype
+    - gocritic
+    - godot
+    - gosec
+    - nilerr
+    - nilnil
+    - nolintlint
+    - perfsprint
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+    - wrapcheck
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: false
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+        - opinionated
+      disabled-checks:
+        - hugeParam
+        - paramTypeCombine
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    staticcheck:
+      checks:
+        - all
+    wrapcheck:
+      ignore-package-globs:
+        - {{ go_module }}/*
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gocritic
+          - revive
+          - unparam
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

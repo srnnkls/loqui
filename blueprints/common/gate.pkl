@@ -1,0 +1,43 @@
+// Hook layout shared by every loqui blueprint.
+//
+// A project's `hk.pkl` passes the merged step maps of its languages:
+//
+//     hooks = gate.standard(rust.fast, rust.heavy, rust.fixers)
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+typealias Steps = Mapping<String, Config.Step>
+
+function standard(fast: Steps, heavy: Steps, fixers: Steps): Mapping<String, Config.Hook> = new {
+  ["pre-commit"] {
+    fix = true
+    stage = true
+    fail_on_fix = true
+    // Checks read the working tree; stashing untracked files has corrupted worktrees.
+    stash = "none"
+    steps = fast
+  }
+  ["check"] {
+    steps = new Mapping<String, Config.Step> {
+      ...fast
+      ...heavy
+    }
+  }
+  ["fix"] {
+    fix = true
+    steps = fixers
+  }
+}
+
+// Applies `.worktreeinclude` links in fresh worktrees; merge into `hooks` where used.
+postCheckout: Mapping<String, Config.Hook> = new {
+  ["post-checkout"] {
+    env {
+      ["MISE_CONFIG_DIR"] = "{{ root }}"
+    }
+    steps {
+      ["worktreeinclude"] {
+        check = "git worktreeinclude apply --quiet"
+      }
+    }
+  }
+}

@@ -1,0 +1,154 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["tomlkit>=0.13"]
+# ///
+"""Own the lint table of a Cargo manifest from `.loqui/rust/lints.toml`.
+
+A workspace root receives `[workspace.lints]` and every member must inherit it
+with `lints.workspace = true`; a single package receives `[lints]` directly.
+`--check` reports drift and exits 1 without writing.
+"""
+
+import argparse
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import tomlkit
+from tomlkit.items import Table
+from tomlkit.toml_document import TOMLDocument
+
+FRAGMENT = Path(".loqui/rust/lints.toml")
+MANIFEST = Path("Cargo.toml")
+
+
+class MissingManifestError(Exception):
+    """A manifest the lint table depends on does not exist."""
+
+    def __init__(self, path: Path) -> None:
+        """Name the missing PATH."""
+        super().__init__(f"{path} not found")
+
+
+@dataclass(frozen=True, kw_only=True)
+class Drift:
+    """One manifest that disagrees with the managed lint table."""
+
+    manifest: Path
+    reason: str
+    fixable: bool = True
+
+
+def read_toml(path: Path) -> TOMLDocument:
+    """Parse the TOML file at PATH."""
+    try:
+        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise MissingManifestError(path) from error
+
+
+def member_manifests(root: TOMLDocument) -> list[Path]:
+    """Return the manifests of the workspace members ROOT declares."""
+    workspace = root["workspace"]
+    here = Path.cwd()
+    excluded = {(here / pattern).resolve() for pattern in workspace.get("exclude", [])}
+    members: list[Path] = []
+    for pattern in workspace.get("members", []):
+        for directory in sorted(here.glob(pattern)):
+            resolved = directory.resolve()
+            manifest = directory / "Cargo.toml"
+            if resolved in excluded or resolved == here or not manifest.is_file():
+                continue
+            members.append(manifest.relative_to(here))
+    return members
+
+
+def inherits_workspace_lints(document: TOMLDocument) -> bool:
+    """Tell whether DOCUMENT's lint table is exactly `workspace = true`."""
+    lints = document.get("lints")
+    return isinstance(lints, Table) and lints.unwrap() == {"workspace": True}
+
+
+def inheritance_drift(manifest: Path, document: TOMLDocument) -> Drift | None:
+    """Return the drift of a member MANIFEST that does not inherit workspace lints."""
+    if inherits_workspace_lints(document):
+        return None
+    if "lints" in document:
+        return Drift(
+            manifest=manifest,
+            reason="defines its own [lints]; cargo cannot combine them with workspace lints, "
+            "so move exceptions to #[expect(lint, reason = ...)] in source",
+            fixable=False,
+        )
+    return Drift(manifest=manifest, reason="does not inherit with `lints.workspace = true`")
+
+
+def inheritance_table() -> Table:
+    """Return a `[lints]` table that inherits workspace lints."""
+    table = tomlkit.table()
+    table["workspace"] = True
+    return table
+
+
+def lint_table(fragment: TOMLDocument) -> Table:
+    """Return FRAGMENT's lint groups as a table to place in a manifest."""
+    table = tomlkit.table(is_super_table=True)
+    for name, group in fragment.items():
+        table[name] = group
+    return table
+
+
+def reconcile(*, write: bool) -> list[Drift]:
+    """Compare the manifests with the managed lint table, writing fixes when WRITE."""
+    fragment = read_toml(FRAGMENT)
+    root = read_toml(MANIFEST)
+    is_workspace = "workspace" in root
+    owner = root["workspace"] if is_workspace else root
+    key = "workspace.lints" if is_workspace else "lints"
+    drifts: list[Drift] = []
+
+    current = owner.get("lints")
+    if current is None or current.unwrap() != fragment.unwrap():
+        drifts.append(Drift(manifest=MANIFEST, reason=f"[{key}] differs from {FRAGMENT}"))
+        owner["lints"] = lint_table(fragment)
+
+    if is_workspace:
+        if "package" in root and not inherits_workspace_lints(root):
+            drifts.append(
+                Drift(manifest=MANIFEST, reason="root package does not inherit workspace lints"),
+            )
+            root["lints"] = inheritance_table()
+        for member in member_manifests(root):
+            document = read_toml(member)
+            drift = inheritance_drift(member, document)
+            if drift is None:
+                continue
+            drifts.append(drift)
+            if write and drift.fixable:
+                document["lints"] = inheritance_table()
+                member.write_text(tomlkit.dumps(document), encoding="utf-8")
+
+    if write and drifts:
+        MANIFEST.write_text(tomlkit.dumps(root), encoding="utf-8")
+    return drifts
+
+
+def main() -> int:
+    """Run the reconciliation and report every drift on stderr."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="report drift without writing")
+    args = parser.parse_args()
+    try:
+        drifts = reconcile(write=not args.check)
+    except MissingManifestError as error:
+        sys.stderr.write(f"merge-lints: {error}\n")
+        return 2
+    for drift in drifts:
+        sys.stderr.write(f"merge-lints: {drift.manifest}: {drift.reason}\n")
+    unresolved = [drift for drift in drifts if args.check or not drift.fixable]
+    return 1 if unresolved else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

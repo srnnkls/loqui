@@ -1,0 +1,22 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local shellGlob = List("**/*.sh", "**/*.bash")
+local shfmtFlags = "--indent 2 --case-indent --binary-next-line --simplify"
+
+fast: Mapping<String, Config.Step> = new {
+  ["bash-shellcheck"] {
+    glob = shellGlob
+    check = "shellcheck {{ files }}"
+  }
+  ["bash-fmt"] {
+    glob = shellGlob
+    check = "shfmt \(shfmtFlags) --diff {{ files }}"
+    fix = "shfmt \(shfmtFlags) --write {{ files }}"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {}
+
+fixers: Mapping<String, Config.Step> = new {
+  ["bash-fmt"] = (fast["bash-fmt"]) { check = null }
+}
