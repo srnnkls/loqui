@@ -1,0 +1,14 @@
+[sources.loqui-zig]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/zig"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-zig]
+collapse = false
+take = [
+  { "hk.pkl" = ".loqui/hk/zig.pkl" },
+  { "check.zig" = ".loqui/zig/check.zig" },
+]

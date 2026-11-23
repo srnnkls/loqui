@@ -1,0 +1,19 @@
+[sources.loqui-go]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/go"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-go]
+collapse = false
+template = ["golangci.yml"]
+take = [
+  { "hk.pkl" = ".loqui/hk/go.pkl" },
+  { "golangci.yml" = ".golangci.yml" },
+  { "mise.toml" = ".config/mise/conf.d/loqui-go.toml" },
+]
+
+[vars]
+go_module = ""

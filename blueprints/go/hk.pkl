@@ -1,0 +1,40 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local goGlob = List("**/*.go", "**/go.mod", "**/go.sum", ".golangci.yml")
+
+fast: Mapping<String, Config.Step> = new {
+  ["go-fmt"] {
+    glob = goGlob
+    check = "golangci-lint fmt --diff"
+    fix = "golangci-lint fmt"
+  }
+  ["go-mod-tidy"] {
+    glob = goGlob
+    check = "go mod tidy -diff"
+    fix = "go mod tidy"
+  }
+  ["go-lint"] {
+    glob = goGlob
+    check = "golangci-lint run"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {
+  ["go-build"] {
+    glob = goGlob
+    check = "go build ./..."
+  }
+  ["go-test"] {
+    glob = goGlob
+    check = "go test ./..."
+  }
+}
+
+fixers: Mapping<String, Config.Step> = new {
+  ["go-fmt"] = (fast["go-fmt"]) { check = null }
+  ["go-mod-tidy"] = (fast["go-mod-tidy"]) { check = null }
+  ["go-fix"] {
+    glob = goGlob
+    fix = "go fix ./..."
+  }
+}

@@ -1,0 +1,26 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local zigGlob = List("**/*.zig", "build.zig.zon")
+
+fast: Mapping<String, Config.Step> = new {
+  ["zig-fmt"] {
+    glob = zigGlob
+    check = "zig build fmt"
+    fix = "zig fmt build.zig src"
+  }
+  ["zig-check"] {
+    glob = zigGlob
+    check = "zig build check"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {
+  ["zig-test"] {
+    glob = zigGlob
+    check = "zig build test"
+  }
+}
+
+fixers: Mapping<String, Config.Step> = new {
+  ["zig-fmt"] = (fast["zig-fmt"]) { check = null }
+}

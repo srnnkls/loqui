@@ -1,0 +1,19 @@
+line-length = 100
+
+[lint]
+select = ["ALL"]
+ignore = [
+  "D203",   # contradicts D211 (no blank line before a class docstring)
+  "D213",   # contradicts D212 (summary on the first docstring line)
+  "COM812", # conflicts with ruff format
+  "ISC001", # conflicts with ruff format
+  "CPY001", # copyright headers are a per-project licensing choice
+]
+
+[lint.per-file-ignores]
+"test_*.py" = ["S101", "PLR2004", "D"]
+"*_test.py" = ["S101", "PLR2004", "D"]
+"conftest.py" = ["S101", "D"]
+
+[format]
+docstring-code-format = true

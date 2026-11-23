@@ -1,0 +1,277 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["tomlkit>=0.13"]
+# ///
+"""Loqui project tooling.
+
+`loqui init LANGUAGE...` binds the current project to loqui blueprints: it merges
+each language's `blueprints/<language>/phora.toml` into the project's
+`phora.toml`, copies scaffold files the project lacks, writes `hk.pkl` when
+absent, and runs `phora sync`. Existing project files are never overwritten.
+"""
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import tomlkit
+from tomlkit.items import Array, Table
+from tomlkit.toml_document import TOMLDocument
+
+LOQUI_ROOT = Path(__file__).resolve().parents[1]
+BLUEPRINTS = LOQUI_ROOT / "blueprints"
+LANGUAGES = ("rust", "python", "go", "elisp", "zig", "bash")
+HK_CONFIG = "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+
+class InitError(Exception):
+    """Initialization cannot proceed."""
+
+
+class MalformedVarError(InitError):
+    """A `--var` argument is not `NAME=VALUE`."""
+
+    def __init__(self, assignment: str) -> None:
+        """Name the malformed ASSIGNMENT."""
+        super().__init__(f"--var expects NAME=VALUE, got {assignment!r}")
+
+
+class MissingVarError(InitError):
+    """A blueprint var has neither a project value nor a default."""
+
+    def __init__(self, name: str) -> None:
+        """Name the var NAME and how to supply it."""
+        super().__init__(f"blueprint var {name!r} has no value; pass --var {name}=...")
+
+
+class NotACheckoutError(InitError):
+    """`--local` needs loqui as a git checkout, not an installed copy."""
+
+    def __init__(self) -> None:
+        """Name the directory that is not a checkout."""
+        super().__init__(f"--local needs a loqui git checkout; {LOQUI_ROOT} is not one")
+
+
+class CommandError(InitError):
+    """A setup command exited non-zero."""
+
+    def __init__(self, command: list[str], returncode: int) -> None:
+        """Name COMMAND and its RETURNCODE."""
+        super().__init__(f"`{' '.join(command)}` exited {returncode}")
+
+
+@dataclass(frozen=True, kw_only=True)
+class Request:
+    """The languages, vars, and source mode one invocation asks for."""
+
+    languages: tuple[str, ...]
+    variables: dict[str, str]
+    local: bool
+
+
+def parse_request(argv: list[str]) -> Request:
+    """Parse ARGV into a request."""
+    parser = argparse.ArgumentParser(prog="loqui", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="bind the current project to loqui blueprints")
+    init.add_argument("languages", nargs="+", choices=LANGUAGES)
+    init.add_argument(
+        "--var",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="set a blueprint var, e.g. go_module=github.com/you/project",
+    )
+    init.add_argument(
+        "--local",
+        action="store_true",
+        help=f"bind the loqui checkout at {LOQUI_ROOT} through phora.local.toml",
+    )
+    args = parser.parse_args(argv)
+    variables: dict[str, str] = {}
+    for assignment in args.var:
+        name, separator, value = assignment.partition("=")
+        if not separator or not name:
+            raise MalformedVarError(assignment)
+        variables[name] = value
+    return Request(
+        languages=tuple(dict.fromkeys(args.languages)),
+        variables=variables,
+        local=args.local,
+    )
+
+
+def read_document(path: Path) -> TOMLDocument:
+    """Parse the TOML file at PATH, or return an empty document when it is absent."""
+    if not path.exists():
+        return tomlkit.document()
+    return tomlkit.parse(path.read_text(encoding="utf-8"))
+
+
+def detected_variables(project: Path) -> dict[str, str]:
+    """Return blueprint vars the PROJECT's manifests already determine."""
+    go_mod = project / "go.mod"
+    if not go_mod.is_file():
+        return {}
+    match = re.search(r"^module\s+(\S+)", go_mod.read_text(encoding="utf-8"), re.MULTILINE)
+    return {"go_module": match.group(1)} if match else {}
+
+
+def merge_hooks(target: Table, hooks: Table) -> None:
+    """Add HOOKS' commands to TARGET's hooks, keeping existing ones."""
+    existing = target.setdefault("hooks", tomlkit.table())
+    for event, commands in hooks.items():
+        merged = existing.setdefault(event, tomlkit.array())
+        if not isinstance(merged, Array):
+            single = merged
+            merged = tomlkit.array()
+            merged.append(single)
+            existing[event] = merged
+        for command in commands:
+            if command not in merged:
+                merged.append(command)
+
+
+def merge_fragment(config: TOMLDocument, fragment: TOMLDocument, variables: dict[str, str]) -> None:
+    """Merge a blueprint FRAGMENT into CONFIG without replacing project entries."""
+    sources = config.setdefault("sources", tomlkit.table())
+    for name, source in fragment["sources"].items():
+        sources.setdefault(name, source)
+
+    targets = config.setdefault("targets", tomlkit.table(is_super_table=True))
+    for name, fragment_target in fragment["targets"].items():
+        target = targets.setdefault(name, tomlkit.table())
+        target.setdefault("path", fragment_target["path"])
+        bindings = target.setdefault("sources", tomlkit.table())
+        for binding, refinement in fragment_target["sources"].items():
+            bindings.setdefault(binding, refinement)
+        if "hooks" in fragment_target:
+            merge_hooks(target, fragment_target["hooks"])
+
+    for name, default in fragment.get("vars", {}).items():
+        project_vars = config.setdefault("vars", tomlkit.table())
+        if name in project_vars:
+            continue
+        value = variables.get(name, default)
+        if not value:
+            raise MissingVarError(name)
+        project_vars[name] = value
+
+
+def local_overlay(project: Path, source_names: list[str]) -> None:
+    """Point SOURCE_NAMES at the local loqui checkout through `phora.local.toml`."""
+    if not (LOQUI_ROOT / ".git").exists():
+        raise NotACheckoutError
+    path = project / "phora.local.toml"
+    overlay = read_document(path)
+    sources = overlay.setdefault("sources", tomlkit.table())
+    for name in source_names:
+        language = name.removeprefix("loqui-")
+        entry = tomlkit.inline_table()
+        entry.update({"path": str(LOQUI_ROOT), "root": f"blueprints/{language}"})
+        sources[name] = entry
+    path.write_text(tomlkit.dumps(overlay), encoding="utf-8")
+
+
+def copy_scaffold(project: Path, language: str) -> list[Path]:
+    """Copy LANGUAGE's scaffold files the PROJECT lacks; return the ones kept."""
+    scaffold = BLUEPRINTS / language / "scaffold"
+    if not scaffold.is_dir():
+        return []
+    skipped: list[Path] = []
+    for template in sorted(p for p in scaffold.rglob("*") if p.is_file()):
+        destination = project / template.relative_to(scaffold)
+        if destination.exists():
+            skipped.append(destination)
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(template, destination)
+    return skipped
+
+
+def hk_config(languages: tuple[str, ...]) -> str:
+    """Return an `hk.pkl` composing the gates of LANGUAGES."""
+    imports = "\n".join(f'import ".loqui/hk/{language}.pkl"' for language in languages)
+
+    def merged(field: str) -> str:
+        spreads = "; ".join(f"...{language}.{field}" for language in languages)
+        return f"new Mapping<String, Step> {{ {spreads} }}"
+
+    return (
+        f'amends "{HK_CONFIG}"\n'
+        f'import ".loqui/hk/gate.pkl"\n'
+        f"{imports}\n\n"
+        f"hooks = gate.standard(\n"
+        f"  {merged('fast')},\n"
+        f"  {merged('heavy')},\n"
+        f"  {merged('fixers')}\n"
+        f")\n"
+    )
+
+
+def run(command: list[str], project: Path) -> None:
+    """Run COMMAND in PROJECT, raising when it fails."""
+    result = subprocess.run(command, cwd=project, check=False)  # noqa: S603 - fixed argv lists
+    if result.returncode != 0:
+        raise CommandError(command, result.returncode)
+
+
+def initialize(project: Path, request: Request) -> list[str]:
+    """Bind PROJECT to the requested blueprints; return notes for the user."""
+    notes: list[str] = []
+    variables = detected_variables(project) | request.variables
+    config_path = project / "phora.toml"
+    config = read_document(config_path)
+
+    layers = ("common", *request.languages)
+    for layer in layers:
+        fragment = read_document(BLUEPRINTS / layer / "phora.toml")
+        merge_fragment(config, fragment, variables)
+    config_path.write_text(tomlkit.dumps(config), encoding="utf-8")
+
+    if request.local:
+        local_overlay(project, [f"loqui-{layer}" for layer in layers])
+
+    for language in request.languages:
+        notes.extend(f"kept existing {path}" for path in copy_scaffold(project, language))
+
+    hk_path = project / "hk.pkl"
+    if hk_path.exists():
+        notes.append(f"kept existing {hk_path}; compose it from .loqui/hk/gate.pkl by hand")
+    else:
+        hk_path.write_text(hk_config(request.languages), encoding="utf-8")
+
+    run(["phora", "sync"], project)
+    run(["mise", "trust", "--quiet", str(project)], project)
+    run(["mise", "install", "--quiet"], project)
+
+    if "elisp" in request.languages:
+        notes.append(
+            'add to Eask: (load (expand-file-name ".loqui/elisp/strict.el" '
+            "(file-name-directory load-file-name)) nil t)"
+        )
+    if "zig" in request.languages:
+        notes.append('add to build.zig: @import(".loqui/zig/check.zig").addChecks(b, root_module);')
+    return notes
+
+
+def main() -> int:
+    """Run the requested loqui command on the current directory."""
+    try:
+        request = parse_request(sys.argv[1:])
+        notes = initialize(Path.cwd(), request)
+    except InitError as error:
+        sys.stderr.write(f"loqui: {error}\n")
+        return 1
+    for note in notes:
+        sys.stdout.write(f"loqui: {note}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

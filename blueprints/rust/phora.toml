@@ -1,0 +1,20 @@
+[sources.loqui-rust]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/rust"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-rust]
+collapse = false
+take = [
+  { "hk.pkl" = ".loqui/hk/rust.pkl" },
+  { "lints.toml" = ".loqui/rust/lints.toml" },
+  { "merge-lints" = ".loqui/rust/merge-lints" },
+  { "rustfmt.toml" = "rustfmt.toml" },
+  { "clippy.toml" = "clippy.toml" },
+]
+
+[targets.loqui.hooks]
+on_change = ["uv run --quiet --script .loqui/rust/merge-lints"]

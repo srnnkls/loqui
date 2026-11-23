@@ -1,0 +1,32 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local pythonGlob = List("**/*.py", "**/*.pyi", "pyproject.toml", "ruff.toml", "ty.toml", ".loqui/python/ruff.toml")
+
+fast: Mapping<String, Config.Step> = new {
+  ["python-ruff"] {
+    glob = pythonGlob
+    check = "ruff check"
+    fix = "ruff check --fix"
+  }
+  ["python-format"] {
+    glob = pythonGlob
+    check = "ruff format --check"
+    fix = "ruff format"
+  }
+  ["python-ty"] {
+    glob = pythonGlob
+    check = "ty check --error-on-warning"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {
+  ["python-test"] {
+    glob = pythonGlob
+    check = "uv run pytest"
+  }
+}
+
+fixers: Mapping<String, Config.Step> = new {
+  ["python-ruff"] = (fast["python-ruff"]) { check = null }
+  ["python-format"] = (fast["python-format"]) { check = null }
+}

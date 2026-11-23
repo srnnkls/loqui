@@ -1,0 +1,30 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local elispGlob = List("**/*.el", "Eask")
+
+fast: Mapping<String, Config.Step> = new {
+  ["elisp-lint"] {
+    glob = elispGlob
+    check = List(
+      "eask lint checkdoc --strict",
+      "eask lint declare --strict",
+      "eask lint indent --strict",
+      "eask lint regexps --strict",
+      "eask lint keywords --strict",
+      "eask lint package --strict"
+    ).join(" && ")
+  }
+  ["elisp-compile"] {
+    glob = elispGlob
+    check = "eask compile --clean --strict"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {
+  ["elisp-test"] {
+    glob = elispGlob
+    check = "eask run script test"
+  }
+}
+
+fixers: Mapping<String, Config.Step> = new {}

@@ -8,6 +8,8 @@ henia:
   resources:
     package:
       languages/: languages/
+      blueprints/: blueprints/
+      scripts/: bin/
   provides:
     code.style.bash: {path: languages/bash/README.md}
     code.style.elisp: {path: languages/elisp/README.md}
@@ -15,6 +17,12 @@ henia:
     code.style.python: {path: languages/python/README.md}
     code.style.rust: {path: languages/rust/README.md}
     code.style.zig: {path: languages/zig/README.md}
+    scope.bootstrap.bash: {path: blueprints/README.md}
+    scope.bootstrap.elisp: {path: blueprints/README.md}
+    scope.bootstrap.go: {path: blueprints/README.md}
+    scope.bootstrap.python: {path: blueprints/README.md}
+    scope.bootstrap.rust: {path: blueprints/README.md}
+    scope.bootstrap.zig: {path: blueprints/README.md}
     code.validation.go: {command: go vet ./... && go build ./...}
     code.validation.rust: {command: cargo clippy --all-targets -- -D warnings && cargo build}
   targets:
