@@ -25,17 +25,17 @@ After that, the project runs:
 
 Each `<language>/` holds its blueprint files under plain names; the `take` table in `<language>/phora.toml` maps each one to its path in the project. Files under `<language>/scaffold/` are copied once by `loqui init` and then belong to the project.
 
-Deployed blueprint files are phora artifacts: verbatim, hash-verified, overwritten on sync. A project never edits them and never suppresses a finding: it fixes the cause. Each language's `<language>-suppressions` gate step fails on any inline suppression, and a `<language>-rule-overrides` step fails on project config that narrows or ignores the managed rules. A rule that no code can satisfy belongs in the managed base, with the reason.
+Deployed blueprint files are phora artifacts: verbatim, hash-verified, overwritten on sync. A project never edits them; it adds exceptions on top, one rule at a time with a reason, per [Fix lint causes](../skills/loqui/SKILL.md#fix-lint-causes):
 
-| Language | Managed | Project hook-in | Rejected |
-|---|---|---|---|
-| all | `.loqui/hk/gate.pkl`, `.config/mise/conf.d/loqui.toml` | `hk.pkl` imports the gate and adds its own steps | — |
-| Rust | `rustfmt.toml`, `clippy.toml`, `.loqui/rust/lints.toml`, `.loqui/rust/merge-lints` | — | `#[allow(…)]`, `#[expect(…)]`, their inner `#![…]` forms, `cfg_attr(…, allow/expect(…))` |
-| Python | `ty.toml`, `.loqui/python/ruff.toml` | `ruff.toml` extends the base for project settings | `# noqa`, `# ruff: noqa`, `# type: ignore`, `# ty: ignore`, `# pyright: ignore`, `# mypy: ignore-errors`, `# fmt: off`/`skip`; `select`, `ignore`, `extend-ignore` and per-file ignores in a project `ruff.toml` |
-| Go | `.golangci.yml` (rendered with `go_module`) | — | `//nolint`, `//lint:ignore`, `//lint:file-ignore`, `#nosec` |
-| Emacs Lisp | `.loqui/elisp/strict.el` | `Eask` loads it | `with-suppressed-warnings`, `with-no-warnings`, `byte-compile-warnings` |
-| Zig | `.loqui/zig/check.zig` | `build.zig` calls `addChecks` | — (Zig has no lint suppression) |
-| Bash | `.shellcheckrc` | — | `# shellcheck disable=`, `disable=` in a nested `.shellcheckrc` |
+| Language | Managed | Project-owned extension point |
+|---|---|---|
+| all | `.loqui/hk/gate.pkl`, `.config/mise/conf.d/loqui.toml` | `hk.pkl` imports the gate and adds its own steps |
+| Rust | `rustfmt.toml`, `clippy.toml`, `.loqui/rust/lints.toml`, `.loqui/rust/merge-lints` | `#[expect(lint, reason = "...")]` in source |
+| Python | `ty.toml`, `.loqui/python/ruff.toml` | `ruff.toml` extends the base; `ignore` and `extend-per-file-ignores` only, never `select` |
+| Go | `.golangci.yml` (rendered with `go_module`) | `//nolint:linter // reason` |
+| Emacs Lisp | `.loqui/elisp/strict.el` | `Eask` loads it |
+| Zig | `.loqui/zig/check.zig` | `build.zig` calls `addChecks` |
+| Bash | `.shellcheckrc` | `# shellcheck disable=SCxxxx` with a reason |
 
 Cargo has no way to extend a lint table from another file, so `merge-lints` writes `.loqui/rust/lints.toml` into `[workspace.lints]` (or `[lints]` for a single package) on every sync, and the `rust-lints` gate step fails when the table or a member's `lints.workspace = true` drifts.
 

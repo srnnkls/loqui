@@ -111,7 +111,7 @@ Loops are valid for transformations too, and `for_each` can deliberately express
 
 ## Lint Policy
 
-Start with default compiler and Clippy diagnostics, then select additional lints with demonstrated value. Pedantic and nursery groups may need case-by-case exceptions; a blanket group is a project choice, not a language requirement. Give lint groups lower priority when individual overrides are needed:
+Start with default compiler and Clippy diagnostics, then select additional lints with demonstrated value. Pedantic and nursery groups may need case-by-case exceptions; a blanket group is a project choice, not a language requirement. Give lint groups lower priority when individual overrides are needed, and deny `allow_attributes` and `allow_attributes_without_reason` so every exception is an `expect` with a reason:
 
 ```toml
 # Root Cargo.toml
@@ -122,6 +122,8 @@ unsafe_op_in_unsafe_fn = "deny"
 all = { level = "warn", priority = -1 }
 # Optional project policy:
 pedantic = { level = "warn", priority = -1 }
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
 ```
 
 ```toml
@@ -130,12 +132,14 @@ pedantic = { level = "warn", priority = -1 }
 workspace = true
 ```
 
-Use `#[expect(lint, reason = "...")]` for a specific diagnostic that should remain present. It warns when the expectation is unfulfilled, helping expose stale exceptions. `#[allow]` is suitable when the lint is intentionally inapplicable regardless of whether it fires under every build configuration:
+Fix the cause first. When a diagnostic must remain, put `#[expect(lint, reason = "...")]` on the smallest item that triggers it. `expect` warns once the lint stops firing, so stale exceptions surface on their own; `#[allow]` hides them, which is why the policy above denies it. A lint that fires only in some build configurations takes `#[cfg_attr(condition, expect(lint, reason = "..."))]`. The reason states why the code is right as written; for a defect in Clippy or another tool it names the tool, the lint and the upstream issue:
 
 ```rust
 #[expect(dead_code, reason = "reserved internal hook during this refactor")]
 fn future_hook() {}
 ```
+
+A lint that is wrong for the whole project belongs in `[workspace.lints]` with a comment, not in attributes scattered across files.
 
 Prefer enforcing warnings in CI over embedding `#![deny(warnings)]` in a reusable library. New diagnostics can otherwise turn a source-compatible compiler upgrade into a build failure in contexts where lint capping does not apply. Cargo normally caps dependency lints; avoid claiming that every dependency consumer necessarily breaks.
 

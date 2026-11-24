@@ -72,6 +72,10 @@ Prefer early returns when they keep the successful path clear. Check errors befo
 
 Expected failures belong in errors. Document deliberate panic preconditions or `Must` APIs instead of declaring every library panic invalid. Use lowercase composable error messages while preserving proper nouns and protocol spelling. Follow [errors.md](errors.md) for wrapping, partial results, and cleanup failures.
 
+## Lint exceptions
+
+Fix the cause first. When a finding must remain, write `//nolint:linter // reason` on the narrowest line or declaration. golangci-lint's `nolintlint`, with `require-specific` and `require-explanation`, rejects a directive that names no linter or gives no reason and reports one that no longer suppresses anything. For a defect in a linter, the reason names the linter and the upstream issue. A rule that is wrong for the whole module belongs in `.golangci.yml` with a comment.
+
 ## Native validation
 
 Use `gofmt` for formatting. `goimports` can additionally organize imports when it is part of the project's tooling. Run checks appropriate to the change and the project's supported build configurations:

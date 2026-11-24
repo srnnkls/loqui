@@ -163,6 +163,12 @@ Use `$()` for command substitution, not backticks.
 
 ---
 
+## ShellCheck Exceptions
+
+Fix the cause first. When a warning must remain, put the `disable` directive for its one code directly above the command it covers, with the reason on the same comment; for a ShellCheck defect, name the code and the upstream issue. Never disable a code file-wide or in `.shellcheckrc` to silence one site.
+
+---
+
 ## References
 
 - [Google Shell Style Guide](https://google.github.io/styleguide/shellguide.html)

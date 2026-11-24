@@ -143,6 +143,12 @@ Dependencies, conversions and contracts are named where they are used; nothing i
 
 Python [public APIs](languages/python/modules.md#explicit-public-apis) · Rust [ownership contract](languages/rust/README.md#express-the-ownership-contract) · Go [main defaults](languages/go/README.md) · Zig [core rules](languages/zig/README.md#core-rules) · Emacs Lisp [lexical binding](languages/elisp/modernization.md#lexical-binding-is-still-explicit)
 
+### Fix lint causes
+
+A finding is fixed at its cause. An exception is the last resort: it names one rule at the smallest scope, states why the code is right as written, and reports itself once stale. An exception for a tool's own defect names the tool, the rule and the upstream issue. A rule wrong for the whole project is turned off once in the project's lint configuration, with its reason; blanket and file-wide suppressions are never used.
+
+Rust [lint policy](languages/rust/quality.md#lint-policy) · Python [lint exceptions](languages/python/quality.md#lint-exceptions) · Go [lint exceptions](languages/go/quality.md#lint-exceptions) · Emacs Lisp [byte-compiler warnings](languages/elisp/quality.md#make-byte-compiler-warnings-fail) · Bash [ShellCheck exceptions](languages/bash/reference/scripts.md#shellcheck-exceptions)
+
 ---
 
 ## Related

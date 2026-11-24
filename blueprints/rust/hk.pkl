@@ -1,14 +1,8 @@
 import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
-import "gate.pkl"
 
 local rustGlob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", ".loqui/rust/lints.toml")
 
 fast: Mapping<String, Config.Step> = new {
-  ["rust-suppressions"] = gate.suppressions(
-    List("**/*.rs"),
-    #"#!?\[(allow|expect)\(|cfg_attr\((?s:.*?)\b(allow|expect)\("#,
-    true
-  )
   ["rust-lints"] {
     glob = rustGlob
     check = "uv run --quiet --script .loqui/rust/merge-lints --check"

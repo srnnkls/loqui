@@ -1,1 +1,6 @@
 extend = ".loqui/python/ruff.toml"
+
+[lint]
+ignore = []
+
+[lint.extend-per-file-ignores]

@@ -58,3 +58,4 @@ These guides share common themes:
 - *Feature-based organization* — Group by domain, not technical layer
 - *Parse at boundaries* — Accept permissive input, convert to strict types immediately
 - *Explicit over implicit* — Make intent clear through code structure
+- *Fix lint causes* — An exception is specific, explained, and reports itself once stale

@@ -133,6 +133,12 @@ def fetch_user(user_id: str) -> User:
     ...
 ```
 
+### Lint Exceptions
+
+Fix the cause first. When a finding must remain, the inline exception names its rule code and states why, on the line that triggers it. The linters enforce the shape: ruff's `PGH004` rejects a code-less `noqa` and `PGH003` a code-less `type: ignore`, while ruff's `RUF100` and ty's `unused-ignore-comment` report an exception that no longer fires. For a defect in ruff, ty or another tool, the reason names the tool, the rule and the upstream issue.
+
+A rule that is wrong for the whole project goes in `ruff.toml` with a comment, not into comments across files; per-file ignores are for file kinds, such as tests, not single files.
+
 ---
 
 ## Anti-Patterns Checklist

@@ -78,7 +78,7 @@ def inheritance_drift(manifest: Path, document: TOMLDocument) -> Drift | None:
         return Drift(
             manifest=manifest,
             reason="defines its own [lints]; cargo cannot combine them with workspace lints, "
-            "and loqui allows no lint exceptions, so fix the causes instead",
+            "so move exceptions to #[expect(lint, reason = ...)] in source",
             fixable=False,
         )
     return Drift(manifest=manifest, reason="does not inherit with `lints.workspace = true`")
