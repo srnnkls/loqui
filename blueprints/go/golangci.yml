@@ -29,7 +29,6 @@ linters:
     - gosec
     - nilerr
     - nilnil
-    - nolintlint
     - perfsprint
     - prealloc
     - revive
@@ -55,9 +54,6 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
-    nolintlint:
-      require-explanation: true
-      require-specific: true
     staticcheck:
       checks:
         - all

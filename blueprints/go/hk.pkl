@@ -1,8 +1,14 @@
 import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+import "gate.pkl"
 
 local goGlob = List("**/*.go", "**/go.mod", "**/go.sum", ".golangci.yml")
 
 fast: Mapping<String, Config.Step> = new {
+  ["go-suppressions"] = gate.suppressions(
+    List("**/*.go"),
+    #"//[ \t]*(nolint|lint:(file-)?ignore)\b|#nosec\b"#,
+    false
+  )
   ["go-fmt"] {
     glob = goGlob
     check = "golangci-lint fmt --diff"

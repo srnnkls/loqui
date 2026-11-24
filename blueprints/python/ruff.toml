@@ -8,6 +8,7 @@ ignore = [
   "COM812", # conflicts with ruff format
   "ISC001", # conflicts with ruff format
   "CPY001", # copyright headers are a per-project licensing choice
+  "S603",   # flags every subprocess call without shell=True (astral-sh/ruff#4045)
 ]
 
 [lint.per-file-ignores]

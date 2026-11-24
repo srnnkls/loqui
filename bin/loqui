@@ -26,6 +26,7 @@ from tomlkit.toml_document import TOMLDocument
 LOQUI_ROOT = Path(__file__).resolve().parents[1]
 BLUEPRINTS = LOQUI_ROOT / "blueprints"
 LANGUAGES = ("rust", "python", "go", "elisp", "zig", "bash")
+GIT = shutil.which("git") or "git"
 HK_CONFIG = "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
 
 
@@ -90,7 +91,8 @@ def parse_request(argv: list[str]) -> Request:
     init.add_argument(
         "--local",
         action="store_true",
-        help=f"bind the loqui checkout at {LOQUI_ROOT} through phora.local.toml",
+        help=f"bind the committed HEAD of the loqui checkout at {LOQUI_ROOT} "
+        "through phora.local.toml",
     )
     args = parser.parse_args(argv)
     variables: dict[str, str] = {}
@@ -163,17 +165,35 @@ def merge_fragment(config: TOMLDocument, fragment: TOMLDocument, variables: dict
         project_vars[name] = value
 
 
+def git_output(args: list[str]) -> str:
+    """Return the stripped stdout of `git ARGS` run in the loqui checkout."""
+    command = [GIT, "-C", str(LOQUI_ROOT), *args]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise CommandError(command, result.returncode)
+    return result.stdout.strip()
+
+
+def checkout_ref() -> tuple[str, str]:
+    """Return the phora ref key and value naming the checkout's HEAD."""
+    branch = git_output(["branch", "--show-current"])
+    if branch:
+        return "branch", branch
+    return "rev", git_output(["rev-parse", "HEAD"])
+
+
 def local_overlay(project: Path, source_names: list[str]) -> None:
-    """Point SOURCE_NAMES at the local loqui checkout through `phora.local.toml`."""
+    """Point SOURCE_NAMES at the HEAD of the local loqui checkout through `phora.local.toml`."""
     if not (LOQUI_ROOT / ".git").exists():
         raise NotACheckoutError
+    ref_key, ref = checkout_ref()
     path = project / "phora.local.toml"
     overlay = read_document(path)
     sources = overlay.setdefault("sources", tomlkit.table())
     for name in source_names:
         language = name.removeprefix("loqui-")
         entry = tomlkit.inline_table()
-        entry.update({"path": str(LOQUI_ROOT), "root": f"blueprints/{language}"})
+        entry.update({"path": str(LOQUI_ROOT), "root": f"blueprints/{language}", ref_key: ref})
         sources[name] = entry
     path.write_text(tomlkit.dumps(overlay), encoding="utf-8")
 
@@ -216,7 +236,7 @@ def hk_config(languages: tuple[str, ...]) -> str:
 
 def run(command: list[str], project: Path) -> None:
     """Run COMMAND in PROJECT, raising when it fails."""
-    result = subprocess.run(command, cwd=project, check=False)  # noqa: S603 - fixed argv lists
+    result = subprocess.run(command, cwd=project, check=False)
     if result.returncode != 0:
         raise CommandError(command, result.returncode)
 

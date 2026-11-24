@@ -1,8 +1,14 @@
 import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+import "gate.pkl"
 
 local elispGlob = List("**/*.el", "Eask")
 
 fast: Mapping<String, Config.Step> = new {
+  ["elisp-suppressions"] = gate.suppressions(
+    List("**/*.el", "Eask"),
+    #"\((with-suppressed-warnings|with-no-warnings)\b|\bbyte-compile-warnings\b"#,
+    false
+  )
   ["elisp-lint"] {
     glob = elispGlob
     check = List(

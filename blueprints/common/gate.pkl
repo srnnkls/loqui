@@ -7,6 +7,14 @@ import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.
 
 typealias Steps = Mapping<String, Config.Step>
 
+// Fails when PATTERN matches any file of PATHS: loqui projects fix a finding's
+// cause and never suppress it inline. MULTILINE lets PATTERN span lines.
+function suppressions(paths: List<String>, pattern: String, multiline: Boolean): Config.Step = new {
+  glob = paths
+  exclude = List(".loqui/**")
+  check = "found=0; rg --line-number \(if (multiline) "--multiline " else "")--regexp '\(pattern)' {{ files }} || found=$?; test \"$found\" -eq 1"
+}
+
 function standard(fast: Steps, heavy: Steps, fixers: Steps): Mapping<String, Config.Hook> = new {
   ["pre-commit"] {
     fix = true

@@ -1,8 +1,19 @@
 import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+import "gate.pkl"
 
 local pythonGlob = List("**/*.py", "**/*.pyi", "pyproject.toml", "ruff.toml", "ty.toml", ".loqui/python/ruff.toml")
 
 fast: Mapping<String, Config.Step> = new {
+  ["python-suppressions"] = gate.suppressions(
+    List("**/*.py", "**/*.pyi"),
+    #"(?i)#[ \t]*(noqa\b|type:[ \t]*ignore\b|ty:[ \t]*ignore\b|pyright:[ \t]*ignore\b|mypy:[ \t]*ignore|ruff:[ \t]*noqa\b|fmt:[ \t]*(off|skip)\b)"#,
+    false
+  )
+  ["python-rule-overrides"] = gate.suppressions(
+    List("**/ruff.toml", "**/.ruff.toml"),
+    #"^[ \t]*(select|ignore|extend-ignore|per-file-ignores|extend-per-file-ignores)[ \t]*=|^\[(lint\.)?(extend-)?per-file-ignores\]"#,
+    false
+  )
   ["python-ruff"] {
     glob = pythonGlob
     check = "ruff check"

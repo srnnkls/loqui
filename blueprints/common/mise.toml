@@ -2,6 +2,7 @@
 hk = { version = "2.13.0", postinstall = "hk install --mise", depends = ["pkl"] }
 pkl = "0.33.1"
 "github:srnnkls/phora" = "0.5.0"
+ripgrep = "16.0.0"
 
 [tasks."loqui:check"]
 description = "Run every loqui gate: format, lint, type check, tests"
