@@ -13,6 +13,8 @@ file = "git::https://github.com/srnnkls/loqui.git//bin/loqui?ref=main"
 
 mise fetches the repository at `ref` into its cache and runs the script from there, so the blueprints it reads come from the same commit. `ref` takes a branch, tag, or commit; a tag or commit pins loqui for the project.
 
+mise loads `git::` file tasks only with `experimental` on, and the script runs under `uv`. The first `loqui init` needs both from the machine; afterwards the managed `.config/mise/conf.d/loqui.toml` sets `experimental` and pins `uv` for every checkout, CI included.
+
 ```bash
 mise run loqui init rust python          # bind the blueprints at the runner's ref
 mise run loqui init go --var go_module=example.com/demo
