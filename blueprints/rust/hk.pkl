@@ -5,8 +5,8 @@ local rustGlob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", ".loqui/rust/lin
 fast: Mapping<String, Config.Step> = new {
   ["rust-lints"] {
     glob = rustGlob
-    check = "uv run --quiet --script .loqui/rust/merge-lints --check"
-    fix = "uv run --quiet --script .loqui/rust/merge-lints"
+    check = "mise run loqui merge-lints --check"
+    fix = "mise run loqui merge-lints"
   }
   ["rust-fmt"] {
     glob = rustGlob

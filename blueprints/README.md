@@ -4,13 +4,23 @@ Strict lint, format, type-check, and hook configuration for projects that follow
 
 ## Start a project
 
-```bash
-loqui init rust python          # bind the GitHub repository
-loqui init --local rust         # bind a loqui git checkout through phora.local.toml
-loqui init go --var go_module=example.com/demo
+A project pins the runner, `bin/loqui`, as a mise file task in its own `mise.toml`:
+
+```toml
+[tasks.loqui]
+file = "git::https://github.com/srnnkls/loqui.git//bin/loqui?ref=main"
 ```
 
-Runner: `bin/loqui`, installed with the loqui skill as `scripts/loqui` next to `blueprints/`; a consumer puts it on `PATH`. `loqui init` merges each language's `phora.toml` into the project's, copies scaffold files the project lacks, writes `hk.pkl` when absent, then runs `phora sync`, `mise trust`, and `mise install`. It never overwrites a project file.
+mise fetches the repository at `ref` into its cache and runs the script from there, so the blueprints it reads come from the same commit. `ref` takes a branch, tag, or commit; a tag or commit pins loqui for the project.
+
+```bash
+mise run loqui init rust python          # bind the blueprints at the runner's ref
+mise run loqui init go --var go_module=example.com/demo
+```
+
+`loqui init` merges each language's `phora.toml` into the project's and binds every `loqui-*` source to the ref the runner was fetched at, copies scaffold files the project lacks, writes `hk.pkl` when absent, then runs `phora sync`, `mise trust`, and `mise install`. It never overwrites a project file. To move a project to another loqui version, change `ref` and run `mise run loqui init` with the same languages again.
+
+To develop loqui itself, point `file` at a checkout's `bin/loqui` and run `mise run loqui init --local rust`; the sources then bind the committed HEAD of that checkout through `phora.local.toml`.
 
 After that, the project runs:
 
@@ -30,13 +40,13 @@ Deployed blueprint files are phora artifacts: verbatim, hash-verified, overwritt
 | Language | Managed | Project-owned extension point |
 |---|---|---|
 | all | `.loqui/hk/gate.pkl`, `.config/mise/conf.d/loqui.toml` | `hk.pkl` imports the gate and adds its own steps |
-| Rust | `rustfmt.toml`, `clippy.toml`, `.loqui/rust/lints.toml`, `.loqui/rust/merge-lints` | `#[expect(lint, reason = "...")]` in source |
+| Rust | `rustfmt.toml`, `clippy.toml`, `.loqui/rust/lints.toml` | `#[expect(lint, reason = "...")]` in source |
 | Python | `ty.toml`, `.loqui/python/ruff.toml` | `ruff.toml` extends the base; `ignore` and `extend-per-file-ignores` only, never `select` |
 | Go | `.golangci.yml` (rendered with `go_module`) | `//nolint:linter // reason` |
 | Emacs Lisp | `.loqui/elisp/strict.el` | `Eask` loads it |
 | Zig | `.loqui/zig/check.zig` | `build.zig` calls `addChecks` |
 | Bash | `.shellcheckrc` | `# shellcheck disable=SCxxxx` with a reason |
 
-Cargo has no way to extend a lint table from another file, so `merge-lints` writes `.loqui/rust/lints.toml` into `[workspace.lints]` (or `[lints]` for a single package) on every sync, and the `rust-lints` gate step fails when the table or a member's `lints.workspace = true` drifts.
+Cargo has no way to extend a lint table from another file, so `loqui merge-lints` writes `.loqui/rust/lints.toml` into `[workspace.lints]` (or `[lints]` for a single package) on every sync, and the `rust-lints` gate step fails when the table or a member's `lints.workspace = true` drifts.
 
 Toolchain pins for the lint tools live in the managed `.config/mise/conf.d/loqui*.toml`; compiler and runtime versions stay in the project's own `mise.toml`.
