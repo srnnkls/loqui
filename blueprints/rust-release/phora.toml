@@ -1,0 +1,16 @@
+[sources.loqui-rust-release]
+repo = "srnnkls/loqui"
+branch = "main"
+root = "blueprints/rust-release"
+
+[targets.loqui]
+path = "."
+
+[targets.loqui.sources.loqui-rust-release]
+collapse = false
+take = [
+  { "hk.pkl" = ".loqui/hk/rust-release.pkl" },
+  { "cliff.toml" = ".loqui/rust-release/cliff.toml" },
+  { "release-plz.yml" = ".github/workflows/release-plz.yml" },
+  { "mise.toml" = ".config/mise/conf.d/loqui-rust-release.toml" },
+]

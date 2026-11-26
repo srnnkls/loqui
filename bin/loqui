@@ -5,11 +5,13 @@
 # ///
 """Loqui project tooling.
 
-`loqui init LANGUAGE...` binds the current project to loqui blueprints: it merges
-each language's `blueprints/<language>/phora.toml` into the project's
-`phora.toml`, pins every loqui source to the commit this script runs from,
-copies scaffold files the project lacks, writes `hk.pkl` when absent, and runs
-`phora sync`. Existing project files are never overwritten.
+`loqui init LAYER...` binds the current project to loqui blueprints: it writes
+each layer's `blueprints/<layer>/phora.toml` into the project's `phora.toml`,
+pins every loqui source to the commit this script runs from, copies scaffold
+files the project lacks, writes `hk.pkl` when absent, and runs `phora sync`.
+
+`loqui update` does the same for the layers the project already binds, so a
+project picks up the blueprints of the commit this script runs from.
 
 `loqui merge-lints [--check]` reconciles a Cargo manifest's lint table with the
 deployed `.loqui/rust/lints.toml`.
@@ -24,7 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import tomlkit
-from tomlkit.items import Array, Table
+from tomlkit.items import Table
 from tomlkit.toml_document import TOMLDocument
 
 LOQUI_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +34,9 @@ BLUEPRINTS = LOQUI_ROOT / "blueprints"
 MERGE_LINTS = BLUEPRINTS / "rust" / "merge-lints"
 REF_KEYS = ("branch", "tag", "rev")
 LANGUAGES = ("rust", "python", "go", "elisp", "zig", "bash")
+LAYERS = (*LANGUAGES, "rust-release")
+LOQUI_TARGET = "loqui"
+SOURCE_PREFIX = "loqui-"
 GIT = shutil.which("git") or "git"
 HK_CONFIG = "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
 
@@ -64,6 +69,14 @@ class NotACheckoutError(InitError):
         super().__init__(f"--local needs a loqui git checkout; {LOQUI_ROOT} is not one")
 
 
+class NotBoundError(InitError):
+    """`loqui update` needs a project `loqui init` bound."""
+
+    def __init__(self) -> None:
+        """Name the command that binds a project."""
+        super().__init__("the project binds no loqui layer; run `loqui init LAYER...` first")
+
+
 class CommandError(InitError):
     """A setup command exited non-zero."""
 
@@ -74,9 +87,9 @@ class CommandError(InitError):
 
 @dataclass(frozen=True, kw_only=True)
 class Request:
-    """The languages, vars, and source mode one invocation asks for."""
+    """The layers, vars, and source mode one invocation asks for."""
 
-    languages: tuple[str, ...]
+    layers: tuple[str, ...]
     variables: dict[str, str]
     local: bool
 
@@ -93,20 +106,24 @@ def parse_request(argv: list[str]) -> Request | MergeLintsRequest:
     parser = argparse.ArgumentParser(prog="loqui", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     init = commands.add_parser("init", help="bind the current project to loqui blueprints")
-    init.add_argument("languages", nargs="+", choices=LANGUAGES)
-    init.add_argument(
-        "--var",
-        action="append",
-        default=[],
-        metavar="NAME=VALUE",
-        help="set a blueprint var, e.g. go_module=github.com/you/project",
+    init.add_argument("layers", nargs="+", choices=LAYERS)
+    update = commands.add_parser(
+        "update", help="move the project's blueprints to this runner's commit"
     )
-    init.add_argument(
-        "--local",
-        action="store_true",
-        help=f"bind the committed HEAD of the loqui checkout at {LOQUI_ROOT} "
-        "through phora.local.toml",
-    )
+    for command in (init, update):
+        command.add_argument(
+            "--var",
+            action="append",
+            default=[],
+            metavar="NAME=VALUE",
+            help="set a blueprint var, e.g. go_module=github.com/you/project",
+        )
+        command.add_argument(
+            "--local",
+            action="store_true",
+            help=f"bind the committed HEAD of the loqui checkout at {LOQUI_ROOT} "
+            "through phora.local.toml",
+        )
     merge_lints = commands.add_parser(
         "merge-lints",
         help="write .loqui/rust/lints.toml into the Cargo manifest's lint table",
@@ -122,7 +139,7 @@ def parse_request(argv: list[str]) -> Request | MergeLintsRequest:
             raise MalformedVarError(assignment)
         variables[name] = value
     return Request(
-        languages=tuple(dict.fromkeys(args.languages)),
+        layers=tuple(dict.fromkeys(getattr(args, "layers", ()))),
         variables=variables,
         local=args.local,
     )
@@ -144,26 +161,41 @@ def detected_variables(project: Path) -> dict[str, str]:
     return {"go_module": match.group(1)} if match else {}
 
 
-def merge_hooks(target: Table, hooks: Table) -> None:
-    """Add HOOKS' commands to TARGET's hooks, keeping existing ones."""
-    existing = target.setdefault("hooks", tomlkit.table())
-    for event, commands in hooks.items():
-        merged = existing.setdefault(event, tomlkit.array())
-        if not isinstance(merged, Array):
-            single = merged
-            merged = tomlkit.array()
-            merged.append(single)
-            existing[event] = merged
+def merge_hooks(hooks: Table, fragment_hooks: Table) -> None:
+    """Add FRAGMENT_HOOKS' commands to HOOKS, keeping their order."""
+    for event, commands in fragment_hooks.items():
+        merged = hooks.setdefault(event, tomlkit.array())
         for command in commands:
             if command not in merged:
                 merged.append(command)
 
 
+def bound_layers(config: TOMLDocument) -> tuple[str, ...]:
+    """Return the loqui layers CONFIG binds, without `common`."""
+    names = config.get("sources", {}).keys()
+    layers = (name.removeprefix(SOURCE_PREFIX) for name in names if name.startswith(SOURCE_PREFIX))
+    return tuple(layer for layer in layers if layer in LAYERS)
+
+
+def clear_loqui(config: TOMLDocument) -> None:
+    """Drop the loqui sources and the loqui target from CONFIG; loqui writes them whole."""
+    sources = config.get("sources", {})
+    for name in [name for name in sources if name.startswith(SOURCE_PREFIX)]:
+        del sources[name]
+    config.get("targets", {}).pop(LOQUI_TARGET, None)
+
+
+def dump_tidy(config: TOMLDocument) -> str:
+    """Return CONFIG as TOML with exactly one blank line before each table."""
+    spaced = re.sub(r"([^\n])\n\[", r"\1\n\n[", tomlkit.dumps(config))
+    return re.sub(r"\n{3,}", "\n\n", spaced).lstrip("\n")
+
+
 def merge_fragment(config: TOMLDocument, fragment: TOMLDocument, variables: dict[str, str]) -> None:
-    """Merge a blueprint FRAGMENT into CONFIG without replacing project entries."""
+    """Write a blueprint FRAGMENT's loqui entries into CONFIG, keeping project vars."""
     sources = config.setdefault("sources", tomlkit.table())
     for name, source in fragment["sources"].items():
-        sources.setdefault(name, source)
+        sources[name] = source
 
     targets = config.setdefault("targets", tomlkit.table(is_super_table=True))
     for name, fragment_target in fragment["targets"].items():
@@ -171,9 +203,9 @@ def merge_fragment(config: TOMLDocument, fragment: TOMLDocument, variables: dict
         target.setdefault("path", fragment_target["path"])
         bindings = target.setdefault("sources", tomlkit.table())
         for binding, refinement in fragment_target["sources"].items():
-            bindings.setdefault(binding, refinement)
+            bindings[binding] = refinement
         if "hooks" in fragment_target:
-            merge_hooks(target, fragment_target["hooks"])
+            merge_hooks(target.setdefault("hooks", tomlkit.table()), fragment_target["hooks"])
 
     for name, default in fragment.get("vars", {}).items():
         project_vars = config.setdefault("vars", tomlkit.table())
@@ -194,15 +226,9 @@ def git_output(args: list[str]) -> str:
     return result.stdout.strip()
 
 
-def checkout_ref() -> tuple[str, str]:
-    """Return the phora ref key and value naming the checkout's HEAD."""
-    branch = git_output(["branch", "--show-current"])
-    if branch:
-        return "branch", branch
-    tags = git_output(["tag", "--points-at", "HEAD"]).split()
-    if tags:
-        return "tag", tags[0]
-    return "rev", git_output(["rev-parse", "HEAD"])
+def checkout_commit() -> str:
+    """Return the commit of the loqui checkout running this script."""
+    return git_output(["rev-parse", "HEAD"])
 
 
 def is_checkout() -> bool:
@@ -212,64 +238,87 @@ def is_checkout() -> bool:
 
 def pin_sources(config: TOMLDocument, source_names: list[str]) -> None:
     """Bind SOURCE_NAMES in CONFIG to the commit of the loqui checkout running this script."""
-    ref_key, ref = checkout_ref()
+    commit = checkout_commit()
     for name in source_names:
         source = config["sources"][name]
         for key in REF_KEYS:
             source.pop(key, None)
-        source[ref_key] = ref
+        source["rev"] = commit
 
 
 def local_overlay(project: Path, source_names: list[str]) -> None:
     """Point SOURCE_NAMES at the HEAD of the local loqui checkout through `phora.local.toml`."""
     if not is_checkout():
         raise NotACheckoutError
-    ref_key, ref = checkout_ref()
+    commit = checkout_commit()
     path = project / "phora.local.toml"
     overlay = read_document(path)
     sources = overlay.setdefault("sources", tomlkit.table())
     for name in source_names:
-        language = name.removeprefix("loqui-")
+        layer = name.removeprefix(SOURCE_PREFIX)
         entry = tomlkit.inline_table()
-        entry.update({"path": str(LOQUI_ROOT), "root": f"blueprints/{language}", ref_key: ref})
+        entry.update({"path": str(LOQUI_ROOT), "root": f"blueprints/{layer}", "rev": commit})
         sources[name] = entry
     path.write_text(tomlkit.dumps(overlay), encoding="utf-8")
 
 
-def copy_scaffold(project: Path, language: str) -> list[Path]:
-    """Copy LANGUAGE's scaffold files the PROJECT lacks; return the ones kept."""
-    scaffold = BLUEPRINTS / language / "scaffold"
+def copy_scaffold(project: Path, layer: str) -> None:
+    """Copy LAYER's scaffold files the PROJECT lacks."""
+    scaffold = BLUEPRINTS / layer / "scaffold"
     if not scaffold.is_dir():
-        return []
-    skipped: list[Path] = []
+        return
     for template in sorted(p for p in scaffold.rglob("*") if p.is_file()):
         destination = project / template.relative_to(scaffold)
         if destination.exists():
-            skipped.append(destination)
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(template, destination)
-    return skipped
 
 
-def hk_config(languages: tuple[str, ...]) -> str:
-    """Return an `hk.pkl` composing the gates of LANGUAGES."""
-    imports = "\n".join(f'import ".loqui/hk/{language}.pkl"' for language in languages)
+def pkl_name(layer: str) -> str:
+    """Return the Pkl identifier LAYER's gate module is imported as."""
+    head, *rest = layer.split("-")
+    return head + "".join(part.capitalize() for part in rest)
+
+
+def hk_config(layers: tuple[str, ...]) -> str:
+    """Return an `hk.pkl` composing the gates of LAYERS."""
+
+    def imported(layer: str) -> str:
+        alias = pkl_name(layer)
+        suffix = "" if alias == layer else f" as {alias}"
+        return f'import ".loqui/hk/{layer}.pkl"{suffix}'
 
     def merged(field: str) -> str:
-        spreads = "; ".join(f"...{language}.{field}" for language in languages)
+        spreads = "; ".join(f"...{pkl_name(layer)}.{field}" for layer in layers)
         return f"new Mapping<String, Step> {{ {spreads} }}"
 
     return (
         f'amends "{HK_CONFIG}"\n'
         f'import ".loqui/hk/gate.pkl"\n'
-        f"{imports}\n\n"
+        f"{chr(10).join(imported(layer) for layer in layers)}\n\n"
         f"hooks = gate.standard(\n"
         f"  {merged('fast')},\n"
         f"  {merged('heavy')},\n"
         f"  {merged('fixers')}\n"
         f")\n"
     )
+
+
+def write_hk_config(project: Path, before: tuple[str, ...], layers: tuple[str, ...]) -> str | None:
+    """Write `hk.pkl` for LAYERS unless the project edited the one loqui wrote for BEFORE.
+
+    Return a note when the project's own `hk.pkl` is kept.
+    """
+    path = project / "hk.pkl"
+    if path.exists():
+        current = path.read_text(encoding="utf-8")
+        if current == hk_config(layers):
+            return None
+        if not before or current != hk_config(before):
+            return f"kept edited {path}; compose it from .loqui/hk/gate.pkl by hand"
+    path.write_text(hk_config(layers), encoding="utf-8")
+    return None
 
 
 def run(command: list[str], project: Path) -> None:
@@ -279,44 +328,73 @@ def run(command: list[str], project: Path) -> None:
         raise CommandError(command, result.returncode)
 
 
-def initialize(project: Path, request: Request) -> list[str]:
-    """Bind PROJECT to the requested blueprints; return notes for the user."""
+def tool_version(layer: str, tool: str) -> str:
+    """Return the version of TOOL that LAYER's blueprint pins in mise."""
+    return str(read_document(BLUEPRINTS / layer / "mise.toml")["tools"][tool])
+
+
+def prepare_release(project: Path) -> None:
+    """Pin PROJECT's cargo-dist, add Cargo's `dist` profile, and generate the workflow."""
+    dist_path = project / "dist-workspace.toml"
+    dist = read_document(dist_path)
+    dist.setdefault("dist", tomlkit.table())["cargo-dist-version"] = tool_version(
+        "rust-release", "cargo-dist"
+    )
+    dist_path.write_text(tomlkit.dumps(dist), encoding="utf-8")
+
+    manifest_path = project / "Cargo.toml"
+    manifest = read_document(manifest_path)
+    profiles = manifest.setdefault("profile", tomlkit.table(is_super_table=True))
+    if "dist" not in profiles:
+        profile = tomlkit.table()
+        profile.update({"inherits": "release", "lto": "thin"})
+        profiles["dist"] = profile
+        manifest_path.write_text(tomlkit.dumps(manifest), encoding="utf-8")
+
+    run(["mise", "exec", "--", "dist", "generate"], project)
+
+
+def reconcile(project: Path, request: Request) -> list[str]:
+    """Bind PROJECT to its blueprints at this runner's commit; return notes for the user."""
     notes: list[str] = []
     variables = detected_variables(project) | request.variables
     config_path = project / "phora.toml"
     config = read_document(config_path)
 
-    layers = ("common", *request.languages)
-    source_names = [f"loqui-{layer}" for layer in layers]
-    for layer in layers:
+    before = bound_layers(config)
+    layers = tuple(dict.fromkeys((*before, *request.layers)))
+    if not layers:
+        raise NotBoundError
+    source_names = [f"{SOURCE_PREFIX}{layer}" for layer in ("common", *layers)]
+    clear_loqui(config)
+    for layer in ("common", *layers):
         fragment = read_document(BLUEPRINTS / layer / "phora.toml")
         merge_fragment(config, fragment, variables)
     if is_checkout():
         pin_sources(config, source_names)
-    config_path.write_text(tomlkit.dumps(config), encoding="utf-8")
+    config_path.write_text(dump_tidy(config), encoding="utf-8")
 
     if request.local:
         local_overlay(project, source_names)
 
-    for language in request.languages:
-        notes.extend(f"kept existing {path}" for path in copy_scaffold(project, language))
-
-    hk_path = project / "hk.pkl"
-    if hk_path.exists():
-        notes.append(f"kept existing {hk_path}; compose it from .loqui/hk/gate.pkl by hand")
-    else:
-        hk_path.write_text(hk_config(request.languages), encoding="utf-8")
+    for layer in layers:
+        copy_scaffold(project, layer)
+    if note := write_hk_config(project, before, layers):
+        notes.append(note)
 
     run(["phora", "sync"], project)
     run(["mise", "trust", "--quiet", str(project)], project)
     run(["mise", "install", "--quiet"], project)
+    if "rust-release" in layers:
+        prepare_release(project)
 
-    if "elisp" in request.languages:
+    added = set(layers) - set(before)
+    if "elisp" in added:
         notes.append(
             'add to Eask: (load (expand-file-name ".loqui/elisp/strict.el" '
             "(file-name-directory load-file-name)) nil t)"
         )
-    if "zig" in request.languages:
+    if "zig" in added:
         notes.append('add to build.zig: @import(".loqui/zig/check.zig").addChecks(b, root_module);')
     return notes
 
@@ -333,7 +411,7 @@ def main() -> int:
         request = parse_request(sys.argv[1:])
         if isinstance(request, MergeLintsRequest):
             return merge_lints(request)
-        notes = initialize(Path.cwd(), request)
+        notes = reconcile(Path.cwd(), request)
     except InitError as error:
         sys.stderr.write(f"loqui: {error}\n")
         return 1

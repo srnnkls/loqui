@@ -20,5 +20,5 @@ description = "Fail when managed loqui files drifted from the pinned blueprints"
 run = ["phora sync --frozen --force", "git diff --exit-code"]
 
 [tasks."loqui:update"]
-description = "Move the blueprints to their latest commit, then gate"
-run = ["phora update --prune", "hk check --all"]
+description = "Refetch the loqui runner, move the blueprints to its commit, then gate"
+run = ["mise run --no-cache loqui update", "hk check --all"]

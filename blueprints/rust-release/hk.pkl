@@ -1,0 +1,23 @@
+import "package://github.com/jdx/hk/releases/download/v2.13.0/hk@2.13.0#/Config.pkl"
+
+local releaseGlob = List("dist-workspace.toml", "**/Cargo.toml", ".github/workflows/*.yml")
+
+fast: Mapping<String, Config.Step> = new {
+  ["rust-release-dist"] {
+    glob = releaseGlob
+    check = "dist generate --check"
+    fix = "dist generate"
+  }
+  // cargo-dist owns release.yml; `dist generate --check` gates it.
+  ["rust-release-actionlint"] {
+    glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
+    exclude = List(".github/workflows/release.yml")
+    check = "actionlint {{ files }}"
+  }
+}
+
+heavy: Mapping<String, Config.Step> = new {}
+
+fixers: Mapping<String, Config.Step> = new {
+  ["rust-release-dist"] = (fast["rust-release-dist"]) { check = null }
+}
