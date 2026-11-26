@@ -18,6 +18,7 @@ deployed `.loqui/rust/lints.toml`.
 """
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -333,9 +334,27 @@ def tool_version(layer: str, tool: str) -> str:
     return str(read_document(BLUEPRINTS / layer / "mise.toml")["tools"][tool])
 
 
+def ships_binary(project: Path) -> bool:
+    """Tell whether a package of PROJECT's Cargo workspace builds a binary."""
+    command = ["mise", "exec", "--", "cargo", "metadata", "--no-deps", "--format-version", "1"]
+    result = subprocess.run(command, cwd=project, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise CommandError(command, result.returncode)
+    packages = json.loads(result.stdout)["packages"]
+    return any("bin" in target["kind"] for package in packages for target in package["targets"])
+
+
 def prepare_release(project: Path) -> None:
-    """Pin PROJECT's cargo-dist, add Cargo's `dist` profile, and generate the workflow."""
+    """Pin PROJECT's cargo-dist, add Cargo's `dist` profile, and generate the workflow.
+
+    A workspace without a binary releases through release-plz alone and gets no cargo-dist.
+    """
     dist_path = project / "dist-workspace.toml"
+    if not dist_path.exists():
+        if not ships_binary(project):
+            return
+        shutil.copy2(BLUEPRINTS / "rust-release" / "dist" / dist_path.name, dist_path)
     dist = read_document(dist_path)
     dist.setdefault("dist", tomlkit.table())["cargo-dist-version"] = tool_version(
         "rust-release", "cargo-dist"

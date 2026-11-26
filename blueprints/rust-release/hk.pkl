@@ -5,8 +5,9 @@ local releaseGlob = List("dist-workspace.toml", "**/Cargo.toml", ".github/workfl
 fast: Mapping<String, Config.Step> = new {
   ["rust-release-dist"] {
     glob = releaseGlob
-    check = "dist generate --check"
-    fix = "dist generate"
+    // A workspace without a binary has no dist-workspace.toml and no cargo-dist.
+    check = "test ! -f dist-workspace.toml || dist generate --check"
+    fix = "test ! -f dist-workspace.toml || dist generate"
   }
   // cargo-dist owns release.yml; `dist generate --check` gates it.
   ["rust-release-actionlint"] {

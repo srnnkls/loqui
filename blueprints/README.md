@@ -67,13 +67,13 @@ Toolchain pins for the lint tools live in the managed `.config/mise/conf.d/loqui
 
 ## Rust release
 
-The `rust-release` layer releases a Cargo workspace with [release-plz](https://release-plz.dev) and [cargo-dist](https://axodotdev.github.io/cargo-dist/):
+The `rust-release` layer releases a Cargo workspace with [release-plz](https://release-plz.dev), and its binaries with [cargo-dist](https://axodotdev.github.io/cargo-dist/):
 
 1. Every push to `main` runs `release-pr`, which opens or updates a release PR with the version bumps and changelogs (git-cliff, `.loqui/rust-release/cliff.toml`).
 2. Merging it runs `release`; with `release_always = false` nothing releases before a release PR merges. release-plz publishes the unpublished crates to crates.io through trusted publishing and pushes the `v<version>` tag.
-3. The `release` job dispatches cargo-dist's `release.yml` for that tag, which builds the binaries, attests them, and creates the GitHub Release.
+3. When the workspace ships a binary, the `release` job dispatches cargo-dist's `release.yml` for that tag, which builds the binaries, attests them, and creates the GitHub Release.
 
-`loqui init rust-release` copies `release-plz.toml` and `dist-workspace.toml`, adds `[profile.dist]` to `Cargo.toml`, and runs `dist generate`; the `rust-release-dist` gate step fails when `release.yml` drifts from `dist-workspace.toml`. `loqui update` keeps `[dist] cargo-dist-version` on the pinned cargo-dist.
+`loqui init rust-release` copies `release-plz.toml`. When a package of the workspace builds a binary, it also copies `dist-workspace.toml`, adds `[profile.dist]` to `Cargo.toml`, and runs `dist generate`; the `rust-release-dist` gate step then fails when `release.yml` drifts from `dist-workspace.toml`. A library-only workspace gets no `dist-workspace.toml` and stops at step 2; a later `loqui update` adds cargo-dist once a binary appears. `loqui update` keeps `[dist] cargo-dist-version` on the pinned cargo-dist.
 
 The repository needs, once:
 
