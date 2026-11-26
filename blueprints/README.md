@@ -70,7 +70,7 @@ Toolchain pins for the lint tools live in the managed `.config/mise/conf.d/loqui
 The `rust-release` layer releases a Cargo workspace with [release-plz](https://release-plz.dev) and [cargo-dist](https://axodotdev.github.io/cargo-dist/):
 
 1. Every push to `main` runs `release-pr`, which opens or updates a release PR with the version bumps and changelogs (git-cliff, `.loqui/rust-release/cliff.toml`).
-2. Merging it runs `release`: release-plz publishes the unpublished crates to crates.io through trusted publishing and pushes the `v<version>` tag.
+2. Merging it runs `release`; with `release_always = false` nothing releases before a release PR merges. release-plz publishes the unpublished crates to crates.io through trusted publishing and pushes the `v<version>` tag.
 3. The `release` job dispatches cargo-dist's `release.yml` for that tag, which builds the binaries, attests them, and creates the GitHub Release.
 
 `loqui init rust-release` copies `release-plz.toml` and `dist-workspace.toml`, adds `[profile.dist]` to `Cargo.toml`, and runs `dist generate`; the `rust-release-dist` gate step fails when `release.yml` drifts from `dist-workspace.toml`. `loqui update` keeps `[dist] cargo-dist-version` on the pinned cargo-dist.
